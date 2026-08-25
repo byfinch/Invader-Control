@@ -142,12 +142,18 @@ try {
     }
 
     $CFG = load_cfg($CFG_FILE);
-    $states = []; $last = []; $history = [];
+    $historyPerPage = 20;
+    $historyPage = max(1, (int) ($_GET['page'] ?? 1));
+    $states = []; $last = []; $history = []; $historyTotal = 0; $historyPages = 1;
     try {
         gb_init_db($DB_FILE);
         foreach (gb_db($DB_FILE)->query("SELECT site,status,since,user_status FROM state")->fetchAll() as $row) $states[$row['site']] = $row;
         foreach (gb_db($DB_FILE)->query("SELECT c.* FROM checks c JOIN (SELECT site,MAX(id) mid FROM checks GROUP BY site) x ON x.mid=c.id")->fetchAll() as $row) $last[$row['site']] = $row;
-        $history = gb_db($DB_FILE)->query("SELECT site,ts,status,http,alt,note,ustatus FROM checks ORDER BY id DESC LIMIT 20")->fetchAll();
+        $historyTotal = (int) gb_db($DB_FILE)->query("SELECT COUNT(*) FROM checks")->fetchColumn();
+        $historyPages = max(1, (int) ceil($historyTotal / $historyPerPage));
+        $historyPage = min($historyPage, $historyPages);
+        $historyOffset = ($historyPage - 1) * $historyPerPage;
+        $history = gb_db($DB_FILE)->query("SELECT site,ts,status,http,alt,note,ustatus FROM checks ORDER BY id DESC LIMIT $historyPerPage OFFSET $historyOffset")->fetchAll();
     } catch (Throwable $e) { $error .= ($error ? ' | ' : '') . 'Veritabani: ' . $e->getMessage(); }
 
     $siteCount = count($CFG['sites'] ?? []); $okCount = 0; $attentionCount = 0;
@@ -160,7 +166,8 @@ try {
         if ($key !== '' && isset($seenUrls[$key])) $duplicateUrls[$key] = true;
         $seenUrls[$key] = true;
     }
-    $lastRun = $history[0]['ts'] ?? null;
+    $latestRun = gb_db($DB_FILE)->query("SELECT ts FROM checks ORDER BY id DESC LIMIT 1")->fetchColumn();
+    $lastRun = $latestRun ?: null;
 }
 catch (Throwable $fatal) {
     http_response_code(500);
@@ -184,11 +191,26 @@ button,input{font:inherit}.topbar{height:66px;padding:0 max(24px,calc((100% - 11
 @media(max-width:850px){.summary{grid-template-columns:1fr 1fr}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}.intro{align-items:flex-start;flex-direction:column}.intro form{width:100%}.intro form .btn{width:100%}}
 @media(max-width:560px){.topbar{height:60px;padding:0 16px}.server-state{display:none}.wrap{padding:25px 14px 40px}.intro h1{font-size:25px}.summary{grid-template-columns:1fr 1fr}.metric{padding:15px 14px;min-height:91px}.metric-value{font-size:23px}.metric-note{font-size:10px}.add-pop{position:fixed;right:14px;left:14px;top:115px;width:auto}.monitor-shell{overflow:visible}.monitor-table,.monitor-table tbody{display:block;min-width:0}.monitor-table thead{display:none}.monitor-table tr{display:block;position:relative;padding:10px 0;border-bottom:1px solid var(--line)}.monitor-table tr:last-child{border-bottom:0}.monitor-table td{display:flex;justify-content:space-between;gap:16px;padding:8px 15px;border:0;text-align:right}.monitor-table td:first-child{display:block;text-align:left;padding-right:65px;padding-bottom:12px}.monitor-table td:last-child{position:absolute;right:14px;top:16px;display:block;padding:0}.monitor-table td:nth-child(2):before{content:'Beklenen';color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}.monitor-table td:nth-child(3):before{content:'Googlebot';color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}.monitor-table td:nth-child(4):before{content:'Kullanıcı';color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}.monitor-table td:nth-child(5):before{content:'Alternate';color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}.monitor-table td:nth-child(6):before{content:'Son kontrol';color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}.monitor-table td:nth-child(7):before{content:'HTTP';color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}.monitor-table td:nth-child(5) .alt-cell{text-align:right}.history-table{overflow-x:auto}}
 </style>
+<style>
+:root{--canvas:#f2f0eb;--paper:#fffdfa;--ink:#18201e;--muted:#6c7771;--line:#d8ddd8;--navy:#171d1c;--lime:#d86b4d;--blue:#1f6f6b;--red:#bd4651;--amber:#aa7419;--shadow:0 10px 28px rgba(33,43,39,.07)}
+body{background:var(--canvas);color:var(--ink)}
+.topbar{height:72px;background:var(--navy);border-bottom:3px solid var(--lime)}
+.brand-mark{background:var(--lime);color:#fff8f2;width:36px;height:36px;font-size:12px}
+.brand-copy strong{letter-spacing:1.7px}.brand-copy span{color:#aab5ae}
+.top-actions form{display:block}.top-actions .btn{color:#d8e0db;border-color:#58655f}
+.wrap{max-width:1240px;padding-top:46px}
+.intro{margin-bottom:34px}.intro h1{font-family:Georgia,"Times New Roman",serif;font-size:42px;letter-spacing:-1.4px;font-weight:500;margin:8px 0 8px}.intro p{font-size:14px}.eyebrow,.section-no{color:var(--lime)}
+.btn{border-radius:2px}.btn-primary{background:var(--blue)}.btn-dark{background:var(--navy);border-color:var(--navy)}
+.summary{border:0;border-top:3px solid var(--lime);box-shadow:var(--shadow)}.metric{background:var(--paper);padding:21px 24px}.metric-value{font-family:Georgia,"Times New Roman",serif;font-size:31px;font-weight:500}.metric-value.good{color:var(--blue)}
+.section{margin-top:38px}.section-head{margin-bottom:15px}.section-title h2{font-family:Georgia,"Times New Roman",serif;font-size:21px;font-weight:500}.section-sub{font-size:12px}.table-shell{box-shadow:var(--shadow);border-color:var(--line)}.site-table th{background:#ebece8;color:#68766d;padding:13px 15px}.site-table td{padding:17px 15px}.site-table tbody tr:hover{background:#f7f6f1}.site-name{font-size:14px}.expect,.alt-cell,.time,.http{font-size:11px}.status{font-size:11px}.btn-danger{color:var(--red);border-color:#edb7bd}.history{margin-top:42px}.page-label{font-size:11px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.pagination{display:flex;align-items:center;justify-content:flex-end;gap:5px;margin-top:14px}.pagination a,.pagination span{min-width:30px;height:30px;padding:6px 9px;text-align:center;border:1px solid var(--line);color:var(--muted);text-decoration:none;font-size:12px;background:var(--paper)}.pagination a:hover{border-color:var(--blue);color:var(--blue)}.pagination .current{background:var(--navy);border-color:var(--navy);color:#fff}.pagination .ellipsis{border-color:transparent;background:transparent;min-width:16px}.footer-note{text-align:left;border-top:1px solid var(--line);padding-top:14px}
+@media(max-width:850px){.intro h1{font-size:36px}.summary{grid-template-columns:1fr 1fr}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}}
+@media(max-width:560px){.topbar{height:64px}.wrap{padding:30px 14px 42px}.intro h1{font-size:31px}.intro p{max-width:330px}.summary{grid-template-columns:1fr 1fr}.metric{padding:16px 14px}.metric-value{font-size:25px}.section-title h2{font-size:19px}.pagination{justify-content:center}.footer-note{font-size:10px}.history-table{overflow-x:auto}}
+</style>
 </head>
 <body>
 <header class="topbar">
   <div class="brand"><div class="brand-mark">IC</div><div class="brand-copy"><strong>INVADER CONTROL</strong><span>GOOGLEBOT VIEW MONITOR</span></div></div>
-  <div class="top-actions"><span class="server-state"><i></i>Monitor aktif</span><form method="post"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><button class="btn btn-quiet" name="logout" value="1">Çıkış</button></form></div>
+  <div class="top-actions"><form method="post"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><button class="btn btn-quiet" name="logout" value="1">Çıkış</button></form></div>
 </header>
 <main class="wrap">
   <section class="intro"><div><span class="eyebrow">01 / Genel bakış</span><h1>Kontrol merkezi</h1><p>Googlebot görünümü ile normal kullanıcı görünümünü aynı ölçümde izleyin.</p></div><form method="post"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="run_now"><button class="btn btn-primary">Tüm siteleri kontrol et</button></form></section>
@@ -213,7 +235,7 @@ button,input{font:inherit}.topbar{height:66px;padding:0 max(24px,calc((100% - 11
     <?php endforeach; ?></tbody></table></div>
   </section>
 
-  <details class="history"><summary>Son 20 kontrol kaydını göster</summary><div class="table-shell history-table"><table class="site-table"><thead><tr><th>Zaman</th><th>Site</th><th>Googlebot</th><th>Kullanıcı</th><th>HTTP</th><th>Alternate</th><th>Not</th></tr></thead><tbody><?php if (!$history): ?><tr><td colspan="7" class="empty-state">Henüz kontrol kaydı yok.</td></tr><?php endif; ?><?php foreach ($history as $row): ?><tr><td class="time"><?= h(local_time($row['ts'])) ?></td><td><span class="site-url"><?= h($row['site']) ?></span></td><td><?= status_badge($row['status']) ?></td><td><?= status_badge($row['ustatus'] ?? '-') ?></td><td class="http"><?= h($row['http']) ?></td><td class="expect"><?= h($row['alt'] ?: '-') ?></td><td class="status-note"><?= h($row['note'] ?: '-') ?></td></tr><?php endforeach; ?></tbody></table></div></details>
+  <section class="history"><div class="section-head"><div><div class="section-title"><span class="section-no">03</span><h2>Kontrol geçmişi</h2></div><p class="section-sub">Her sayfada <?= $historyPerPage ?> kayıt gösteriliyor · toplam <?= $historyTotal ?> kayıt</p></div><span class="page-label">Sayfa <?= $historyPage ?> / <?= $historyPages ?></span></div><div class="table-shell history-table"><table class="site-table"><thead><tr><th>Zaman</th><th>Site</th><th>Googlebot</th><th>Kullanıcı</th><th>HTTP</th><th>Alternate</th><th>Not</th></tr></thead><tbody><?php if (!$history): ?><tr><td colspan="7" class="empty-state">Henüz kontrol kaydı yok.</td></tr><?php endif; ?><?php foreach ($history as $row): ?><tr><td class="time"><?= h(local_time($row['ts'])) ?></td><td><span class="site-url"><?= h($row['site']) ?></span></td><td><?= status_badge($row['status']) ?></td><td><?= status_badge($row['ustatus'] ?? '-') ?></td><td class="http"><?= h($row['http']) ?></td><td class="expect"><?= h($row['alt'] ?: '-') ?></td><td class="status-note"><?= h($row['note'] ?: '-') ?></td></tr><?php endforeach; ?></tbody></table></div><nav class="pagination" aria-label="Kontrol geçmişi sayfaları"><?php if ($historyPage > 1): ?><a href="?page=<?= $historyPage - 1 ?>">Önceki</a><?php endif; ?><?php for ($p = 1; $p <= $historyPages; $p++): if ($p === $historyPage): ?><span class="current"><?= $p ?></span><?php elseif ($p <= 3 || $p > $historyPages - 2 || abs($p - $historyPage) <= 1): ?><a href="?page=<?= $p ?>"><?= $p ?></a><?php elseif ($p === 4 || $p === $historyPages - 2): ?><span class="ellipsis">…</span><?php endif; endfor; ?><?php if ($historyPage < $historyPages): ?><a href="?page=<?= $historyPage + 1 ?>">Sonraki</a><?php endif; ?></nav></section>
   <div class="footer-note">Son ölçüm zamanları Europe/Istanbul · HTTP kontrolü Googlebot User-Agent ile yapılır</div>
 </main>
 </body></html>
