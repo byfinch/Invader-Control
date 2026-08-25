@@ -91,27 +91,6 @@ try {
         file_put_contents($tmp, json_encode($job, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
         rename($tmp, $file);
     }
-    function run_job(string $id, array $cfg, string $dbFile): void {
-        ignore_user_abort(true);
-        @set_time_limit(0);
-        $sites = $cfg['sites'] ?? [];
-        $job = ['id' => $id, 'status' => 'running', 'total' => count($sites), 'completed' => 0, 'current' => '', 'results' => [], 'started_at' => date('c'), 'updated_at' => date('c')];
-        save_job($job);
-        foreach ($sites as $site) {
-            $job['current'] = $site['name'] ?? $site['url']; $job['updated_at'] = date('c'); save_job($job);
-            try {
-                $result = gb_process($site, $cfg, $dbFile);
-                $job['results'][] = ['name' => $result['name'], 'status' => $result['status'], 'user_status' => $result['ustatus'] ?? '-', 'http' => $result['http'], 'error' => ''];
-                gb_notify_run($cfg, [$result]);
-            } catch (Throwable $e) {
-                $job['results'][] = ['name' => $site['name'] ?? $site['url'], 'status' => 'ERROR', 'user_status' => 'ERROR', 'http' => 0, 'error' => $e->getMessage()];
-            }
-            $job['completed']++; $job['updated_at'] = date('c'); save_job($job);
-        }
-        $job['status'] = 'completed'; $job['current'] = ''; $job['finished_at'] = date('c'); $job['updated_at'] = date('c'); save_job($job);
-        @file_put_contents('/opt/gbwatch/data/jobs/active.json', json_encode($job), LOCK_EX);
-    }
-
     $CFG = load_cfg($CFG_FILE);
     $message = ''; $error = '';
 
@@ -133,15 +112,13 @@ try {
             http_response_code(403); echo json_encode(['ok' => false, 'error' => 'Oturum doğrulaması geçersiz.']); exit;
         }
         $active = @json_decode((string) @file_get_contents('/opt/gbwatch/data/jobs/active.json'), true);
-        if (is_array($active) && ($active['status'] ?? '') === 'running') {
+        if (is_array($active) && in_array($active['status'] ?? '', ['queued', 'running'], true)) {
             echo json_encode(['ok' => true, 'job_id' => $active['id'], 'existing' => true]); exit;
         }
         $id = bin2hex(random_bytes(12));
         save_job(['id' => $id, 'status' => 'queued', 'total' => count($CFG['sites'] ?? []), 'completed' => 0, 'current' => '', 'results' => [], 'started_at' => date('c'), 'updated_at' => date('c')]);
-        @file_put_contents('/opt/gbwatch/data/jobs/active.json', json_encode(['id' => $id, 'status' => 'running']), LOCK_EX);
+        @file_put_contents('/opt/gbwatch/data/jobs/active.json', json_encode(['id' => $id, 'status' => 'queued']), LOCK_EX);
         echo json_encode(['ok' => true, 'job_id' => $id]);
-        if (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
-        run_job($id, $CFG, $DB_FILE);
         exit;
     }
 

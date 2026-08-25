@@ -204,7 +204,7 @@ function gb_tg_send_evidence(array $tg, array $result, array $capture): bool {
         CURLOPT_POSTFIELDS => [
             'chat_id' => $cid,
             'caption' => $caption,
-            'photo' => new CURLFile($file, 'image/png', 'evidence.png'),
+            'photo' => new CURLFile($file, 'image/jpeg', 'evidence.jpg'),
         ],
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 45,

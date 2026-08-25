@@ -58,12 +58,12 @@ async function capture(url, id) {
   } finally {
     await browser.close();
   }
-  const combined = path.join(dir, 'evidence.png');
+  const combined = path.join(dir, 'evidence.jpg');
   await execFileAsync('/usr/bin/montage', [
     '-background', '#111827', '-fill', '#ffffff', '-pointsize', '22',
     '-label', 'GOOGLEBOT', result.googlebot.path,
     '-label', 'NORMAL KULLANICI', result.user.path,
-    '-tile', '2x1', '-geometry', '720x450+12+42', combined,
+    '-tile', '2x1', '-geometry', '720x450+12+42', '-quality', '82', combined,
   ]);
   result.combined = {path: combined};
   return result;
