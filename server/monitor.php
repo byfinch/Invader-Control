@@ -12,7 +12,7 @@ $cmd = $argv[1] ?? 'run';
 
 if ($cmd === 'test' && isset($argv[2])) {
     $r = gb_check(['url' => $argv[2], 'expect' => '']);
-    printf("%-10s HTTP %d | alt=%s | %s\n", $r['status'], $r['http'], $r['alt'] ? implode(',', $r['alt']) : '-', $r['note']);
+    printf("%-10s HTTP %d | alt=%s | %s | kullanici=%s(%d b)\n", $r['status'], $r['http'], $r['alt'] ? implode(',', $r['alt']) : '-', $r['note'], $r['ustatus'], $r['usize']);
     exit(0);
 }
 
@@ -21,8 +21,8 @@ if ($cmd !== 'run') { fwrite(STDERR, "kullanim: php monitor.php run | test <url>
 foreach ($CFG['sites'] as $s) {
     try {
         $r = gb_process($s, $CFG, "$BASE/data/gbwatch.db");
-        printf("%-10s %s | HTTP %d | alt=%s | %s%s\n", $r['status'], $s['url'], $r['http'],
-            $r['alt'] ? implode(',', $r['alt']) : '-', $r['note'], $r['alert'] ? ' [ALERT]' : '');
+        printf("%-10s %s | HTTP %d | alt=%s | %s | kullanici=%s%s\n", $r['status'], $s['url'], $r['http'],
+            $r['alt'] ? implode(',', $r['alt']) : '-', $r['note'], $r['ustatus'] ?? '-', $r['alert'] ? ' [ALERT]' : '');
     } catch (Throwable $e) {
         printf("HATA       %s | %s\n", $s['url'], $e->getMessage());
     }

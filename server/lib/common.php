@@ -25,6 +25,11 @@ function gb_init_db(string $dbFile): void {
         status TEXT NOT NULL,
         since TEXT DEFAULT (datetime('now')),
         blocked_streak INTEGER DEFAULT 0)");
+    /* migration: eski tabloya ustatus/usize ekle */
+    $cols = gb_db($dbFile)->query("PRAGMA table_info(checks)")->fetchAll();
+    $names = array_column($cols, 'name');
+    if (!in_array('ustatus', $names, true)) gb_db($dbFile)->exec("ALTER TABLE checks ADD COLUMN ustatus TEXT DEFAULT '-'");
+    if (!in_array('usize', $names, true)) gb_db($dbFile)->exec("ALTER TABLE checks ADD COLUMN usize INTEGER DEFAULT 0");
 }
 
 function gb_fetch(string $url, string $ua, int $timeout = 15): array {
@@ -83,21 +88,33 @@ function gb_check(array $site): array {
     try {
         [$code, $hdr, $body, $err] = gb_fetch($url, 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)');
     } catch (Throwable $e) {
-        return ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $e->getMessage()];
+        return ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $e->getMessage(), 'ustatus' => 'ERROR', 'usize' => 0];
     }
-    if ($code === 0) return ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $err];
-    if (gb_is_challenge($code, $hdr, $body)) return ['status' => 'BLOCKED', 'http' => $code, 'size' => strlen($body), 'alt' => [], 'note' => 'bot korumasi'];
+    if ($code === 0) return ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $err, 'ustatus' => 'ERROR', 'usize' => 0];
+    if (gb_is_challenge($code, $hdr, $body)) return ['status' => 'BLOCKED', 'http' => $code, 'size' => strlen($body), 'alt' => [], 'note' => 'bot korumasi', 'ustatus' => '-', 'usize' => 0];
 
     $alts = gb_alternates($body);
     $expect = gb_host_of((string) ($site['expect'] ?? ''));
     if ($expect !== '' && in_array($expect, $alts, true)) {
-        return ['status' => 'OK', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => ''];
-    }
-    if (!$alts) {
+        $r = ['status' => 'OK', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => ''];
+    } elseif (!$alts) {
         $hasHtml = stripos($body, '<body') !== false || stripos($body, '<title') !== false;
-        return ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => [], 'note' => $hasHtml ? 'alternate link yok' : 'HTML donmedi'];
+        $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => [], 'note' => $hasHtml ? 'alternate link yok' : 'HTML donmedi'];
+    } else {
+        $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => 'alternate: ' . implode(', ', $alts)];
     }
-    return ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => 'alternate: ' . implode(', ', $alts)];
+
+    /* normal kullanici gorunumu: ayri sinyal */
+    $r['ustatus'] = 'OK'; $r['usize'] = 0;
+    try {
+        [$uc, $uh, $ub, $ue] = gb_fetch($url, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', 12);
+        $r['usize'] = strlen($ub);
+        if ($uc === 0) $r['ustatus'] = 'ERROR';
+        elseif (gb_is_challenge($uc, $uh, $ub)) $r['ustatus'] = 'BLOCKED';
+        elseif ($uc >= 400) $r['ustatus'] = 'DOWN';
+        elseif (strlen($ub) < 512) $r['ustatus'] = 'EMPTY';   /* 200 ama bos/kucuk govde */
+    } catch (Throwable $e) { $r['ustatus'] = 'ERROR'; }
+    return $r;
 }
 
 function gb_tg_send(array $tg, string $msg): bool {
@@ -126,8 +143,8 @@ function gb_process(array $site, array $cfg, string $dbFile): array {
     $name = $site['name'] ?? $url;
     $r = gb_check($site);
 
-    gb_db($dbFile)->prepare("INSERT INTO checks(site,status,http,size,alt,note) VALUES(?,?,?,?,?,?)")
-        ->execute([$url, $r['status'], $r['http'], $r['size'], implode(',', $r['alt']), $r['note']]);
+    gb_db($dbFile)->prepare("INSERT INTO checks(site,status,http,size,alt,note,ustatus,usize) VALUES(?,?,?,?,?,?,?,?)")
+        ->execute([$url, $r['status'], $r['http'], $r['size'], implode(',', $r['alt']), $r['note'], $r['ustatus'] ?? '-', $r['usize'] ?? 0]);
 
     $q = gb_db($dbFile)->prepare("SELECT status, blocked_streak FROM state WHERE site=?");
     $q->execute([$url]);
@@ -153,7 +170,8 @@ function gb_process(array $site, array $cfg, string $dbFile): array {
 
     if ($alertMsg !== null) {
         gb_tg_send($cfg['telegram'] ?? [], gb_emoji($r['status']) . " " . $name .
-            "\nDurum degisti: " . $oldSt . " -> " . $r['status'] .
+            "\nGooglebot: " . $oldSt . " -> " . $r['status'] .
+            "\nKullanici: " . ($r['ustatus'] ?? '-') .
             "\nHTTP " . $r['http'] . " | alt: " . ($r['alt'] ? implode(', ', $r['alt']) : '-') .
             ($r['note'] !== '' ? "\nNot: " . $r['note'] : ''));
     }

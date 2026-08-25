@@ -50,7 +50,7 @@ try {
         return $j !== false && @file_put_contents($f, $j) !== false;
     }
     function badge(string $st): string {
-        $c = ['OK' => '#16a34a', 'DOWN' => '#dc2626', 'BLOCKED' => '#d97706', 'ERROR' => '#6b7280'][$st] ?? '#6b7280';
+        $c = ['OK' => '#16a34a', 'DOWN' => '#dc2626', 'BLOCKED' => '#d97706', 'ERROR' => '#6b7280', 'EMPTY' => '#a16207'][$st] ?? '#6b7280';
         return "<span style='background:$c;color:#fff;padding:2px 9px;border-radius:4px;font-size:12px;font-weight:600'>$st</span>";
     }
 
@@ -168,13 +168,14 @@ form.inline{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 
 <div class="card"><h2>Siteler</h2>
 <?php if (!($CFG['sites'] ?? [])): ?><p class="muted">Henuz site eklenmedi.</p><?php else: ?>
-<table><tr><th>Site</th><th>Beklenen</th><th>Durum</th><th>Son kontrol</th><th>HTTP</th><th>Alternate</th><th>Not</th><th></th></tr>
+<table><tr><th>Site</th><th>Beklenen</th><th>Googlebot</th><th>Kullanici</th><th>Son kontrol</th><th>HTTP</th><th>Alternate</th><th>Not</th><th></th></tr>
 <?php foreach ($CFG['sites'] as $i => $s):
   $u = $s['url']; $st = $stMap[$u] ?? null; $lc = $last[$u] ?? null; ?>
 <tr>
   <td><b><?= h($s['name'] ?? $u) ?></b><br><small><?= h($u) ?></small></td>
   <td><?= h($s['expect']) ?></td>
-  <td><?= badge($st['status'] ?? '-') ?><br><small><?= $st ? h($st['since']) : '-' ?></small></td>
+  <td><?= badge($st['status'] ?? '-') ?></td>
+  <td><?= $lc ? badge($lc['ustatus'] ?? '-') : '-' ?></td>
   <td><?= $lc ? h($lc['ts']) : '-' ?></td>
   <td><?= $lc ? h($lc['http']) : '-' ?></td>
   <td><?= $lc ? h($lc['alt'] ?: '-') : '-' ?></td>
@@ -209,9 +210,9 @@ form.inline{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 
 <div class="card"><h2>Gecmis (son 60)</h2>
 <?php if (!$history): ?><p class="muted">Kayit yok.</p><?php else: ?>
-<table><tr><th>Zaman</th><th>Site</th><th>Durum</th><th>HTTP</th><th>Alternate</th><th>Not</th></tr>
+<table><tr><th>Zaman</th><th>Site</th><th>Googlebot</th><th>Kullanici</th><th>HTTP</th><th>Alternate</th><th>Not</th></tr>
 <?php foreach ($history as $r): ?>
-<tr><td><?= h($r['ts']) ?></td><td><?= h($r['site']) ?></td><td><?= badge($r['status']) ?></td><td><?= h($r['http']) ?></td><td><?= h($r['alt'] ?: '-') ?></td><td><?= h($r['note']) ?></td></tr>
+<tr><td><?= h($r['ts']) ?></td><td><?= h($r['site']) ?></td><td><?= badge($r['status']) ?></td><td><?= badge($r['ustatus'] ?? '-') ?></td><td><?= h($r['http']) ?></td><td><?= h($r['alt'] ?: '-') ?></td><td><?= h($r['note']) ?></td></tr>
 <?php endforeach; ?></table>
 <?php endif; ?></div>
 
