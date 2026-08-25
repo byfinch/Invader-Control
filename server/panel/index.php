@@ -83,9 +83,67 @@ try {
         $status = $status ?: '-';
         return '<span class="status ' . status_class($status) . '"><i></i>' . h(status_label($status)) . '</span>';
     }
+    function job_file(string $id): string { return '/opt/gbwatch/data/jobs/' . preg_replace('/[^a-f0-9]/', '', $id) . '.json'; }
+    function save_job(array $job): void {
+        $dir = '/opt/gbwatch/data/jobs';
+        if (!is_dir($dir)) @mkdir($dir, 0770, true);
+        $file = job_file($job['id']); $tmp = $file . '.tmp';
+        file_put_contents($tmp, json_encode($job, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
+        rename($tmp, $file);
+    }
+    function run_job(string $id, array $cfg, string $dbFile): void {
+        ignore_user_abort(true);
+        @set_time_limit(0);
+        $sites = $cfg['sites'] ?? [];
+        $job = ['id' => $id, 'status' => 'running', 'total' => count($sites), 'completed' => 0, 'current' => '', 'results' => [], 'started_at' => date('c'), 'updated_at' => date('c')];
+        save_job($job);
+        foreach ($sites as $site) {
+            $job['current'] = $site['name'] ?? $site['url']; $job['updated_at'] = date('c'); save_job($job);
+            try {
+                $result = gb_process($site, $cfg, $dbFile);
+                $job['results'][] = ['name' => $result['name'], 'status' => $result['status'], 'user_status' => $result['ustatus'] ?? '-', 'http' => $result['http'], 'error' => ''];
+                gb_notify_run($cfg, [$result]);
+            } catch (Throwable $e) {
+                $job['results'][] = ['name' => $site['name'] ?? $site['url'], 'status' => 'ERROR', 'user_status' => 'ERROR', 'http' => 0, 'error' => $e->getMessage()];
+            }
+            $job['completed']++; $job['updated_at'] = date('c'); save_job($job);
+        }
+        $job['status'] = 'completed'; $job['current'] = ''; $job['finished_at'] = date('c'); $job['updated_at'] = date('c'); save_job($job);
+        @file_put_contents('/opt/gbwatch/data/jobs/active.json', json_encode($job), LOCK_EX);
+    }
 
     $CFG = load_cfg($CFG_FILE);
     $message = ''; $error = '';
+
+    if (isset($_GET['job'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        if ($_GET['job'] === 'active') {
+            $active = @json_decode((string) @file_get_contents('/opt/gbwatch/data/jobs/active.json'), true);
+            echo json_encode(is_array($active) ? $active : ['status' => 'idle']);
+        } else {
+            $job = @json_decode((string) @file_get_contents(job_file((string) $_GET['job'])), true);
+            echo json_encode(is_array($job) ? $job : ['status' => 'missing']);
+        }
+        exit;
+    }
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['act'] ?? '') === 'start_run') {
+        header('Content-Type: application/json; charset=utf-8');
+        if (!hash_equals($csrf, (string) ($_POST['csrf'] ?? ''))) {
+            http_response_code(403); echo json_encode(['ok' => false, 'error' => 'Oturum doğrulaması geçersiz.']); exit;
+        }
+        $active = @json_decode((string) @file_get_contents('/opt/gbwatch/data/jobs/active.json'), true);
+        if (is_array($active) && ($active['status'] ?? '') === 'running') {
+            echo json_encode(['ok' => true, 'job_id' => $active['id'], 'existing' => true]); exit;
+        }
+        $id = bin2hex(random_bytes(12));
+        save_job(['id' => $id, 'status' => 'queued', 'total' => count($CFG['sites'] ?? []), 'completed' => 0, 'current' => '', 'results' => [], 'started_at' => date('c'), 'updated_at' => date('c')]);
+        @file_put_contents('/opt/gbwatch/data/jobs/active.json', json_encode(['id' => $id, 'status' => 'running']), LOCK_EX);
+        echo json_encode(['ok' => true, 'job_id' => $id]);
+        if (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
+        run_job($id, $CFG, $DB_FILE);
+        exit;
+    }
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['act'] ?? '';
@@ -121,22 +179,6 @@ try {
                     if (save_cfg($CFG, $CFG_FILE)) $message = 'İzleme kaldırıldı: ' . $removed;
                     else $error = 'Yapılandırma dosyası yazılamadı.';
                 }
-            } elseif ($action === 'run_now') {
-                @set_time_limit(300);
-                $CFG = load_cfg($CFG_FILE);
-                $results = []; $runResults = [];
-                foreach (($CFG['sites'] ?? []) as $site) {
-                    try {
-                        $result = gb_process($site, $CFG, $DB_FILE);
-                        $runResults[] = $result;
-                        $results[] = status_label($result['status']) . ' | ' . ($result['name'] ?? $site['url']);
-                    } catch (Throwable $e) {
-                        $runResults[] = ['status' => 'ERROR', 'ustatus' => 'ERROR', 'http' => 0, 'alt' => [], 'note' => $e->getMessage(), 'name' => $site['name'] ?? $site['url']];
-                        $results[] = 'HATA | ' . ($site['name'] ?? $site['url']) . ': ' . $e->getMessage();
-                    }
-                }
-                $sent = $runResults ? gb_notify_run($CFG, $runResults) : false;
-                $message = "Kontrol tamamlandı\n" . implode("\n", $results) . "\nTelegram kanıtı: " . ($sent ? 'gönderildi' : 'gönderilemedi');
             }
         } catch (Throwable $e) { $error = 'Islem hatasi: ' . $e->getMessage(); }
     }
@@ -197,6 +239,7 @@ body{background-color:var(--canvas);background-image:linear-gradient(rgba(73,215
 .topbar{height:70px;background:rgba(8,13,19,.96);border-bottom:1px solid #294252;box-shadow:0 1px 0 rgba(156,255,87,.18)}
  .brand-mark-image{display:block;width:46px;height:46px}.brand-copy strong{display:block;font-size:17px;letter-spacing:2.1px}.brand-copy span{display:block;color:#8296a8;font-size:9px;letter-spacing:1.7px;margin-top:4px}.top-actions form{display:block}.top-actions .btn{color:#a9bdce;border-color:#304453}
 .notice{background:#0e1b24;border:1px solid #2b5262;color:#bdeafa;margin:-10px 0 22px;box-shadow:inset 3px 0 0 var(--blue)}.notice.ok{background:#10231b;border-color:#2f6d48;color:#b9f5c7;box-shadow:inset 3px 0 0 var(--lime)}
+.run-progress{margin:-10px 0 22px;padding:16px 18px;background:#0e1b24;border:1px solid #2b5262;box-shadow:inset 3px 0 0 var(--blue)}.run-progress-head{display:flex;justify-content:space-between;gap:16px;color:#dce8f2;font-size:13px}.run-progress-meta{color:#89a1b3;font:11px ui-monospace,SFMono-Regular,Menlo,monospace}.progress-track{height:5px;background:#1c2a35;margin-top:12px;overflow:hidden}.progress-bar{height:100%;width:0;background:var(--blue);transition:width .25s ease}.run-progress-result{color:#9fb4c3;font-size:12px;margin-top:9px}.run-progress.error{border-color:#733541;box-shadow:inset 3px 0 0 var(--red)}
 .wrap{max-width:1240px;padding-top:42px}.intro{margin-bottom:30px}.intro h1{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;font-size:34px;letter-spacing:-1px;font-weight:600;margin:8px 0 8px}.intro p{font-size:13px;color:#91a6b8}.eyebrow,.section-no{color:var(--blue)}
 .btn{border-radius:2px}.btn-primary{background:var(--blue);color:#061117}.btn-dark{background:#182532;border-color:#2d4555;color:#d9e8f1}
 .summary{border:1px solid var(--line);border-top:2px solid var(--blue);box-shadow:var(--shadow);background:var(--paper)}.metric{background:var(--paper);padding:20px 22px;border-color:var(--line)}.metric-value{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:28px;font-weight:500}.metric-value.good{color:var(--lime)}.metric-value.bad{color:var(--red)}
@@ -212,7 +255,8 @@ body{background-color:var(--canvas);background-image:linear-gradient(rgba(73,215
   <div class="top-actions"><form method="post"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><button class="btn btn-quiet" name="logout" value="1">Çıkış</button></form></div>
 </header>
 <main class="wrap">
-  <section class="intro"><div><span class="eyebrow">01 / Genel bakış</span><h1>Kontrol merkezi</h1><p>Googlebot görünümü ile normal kullanıcı görünümünü aynı ölçümde izleyin.</p></div><form method="post"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="run_now"><button class="btn btn-primary">Tüm siteleri kontrol et</button></form></section>
+  <section class="intro"><div><span class="eyebrow">01 / Genel bakış</span><h1>Kontrol merkezi</h1><p>Googlebot görünümü ile normal kullanıcı görünümünü aynı ölçümde izleyin.</p></div><form method="post" id="run-form"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="start_run"><button class="btn btn-primary" id="run-button" type="submit">Tüm siteleri kontrol et</button></form></section>
+  <div class="run-progress" id="run-progress" hidden><div class="run-progress-head"><strong id="run-progress-title">Kontrol hazırlanıyor</strong><span class="run-progress-meta" id="run-progress-count">0 / 0</span></div><div class="progress-track"><div class="progress-bar" id="run-progress-bar"></div></div><div class="run-progress-result" id="run-progress-current">Sunucu işi başlatıyor...</div></div>
 
   <?php if ($message): ?><div class="notice ok"><?= h($message) ?></div><?php endif; ?>
   <?php if ($error): ?><div class="notice"><?= h($error) ?></div><?php endif; ?>
@@ -237,4 +281,23 @@ body{background-color:var(--canvas);background-image:linear-gradient(rgba(73,215
   <section class="history" id="history"><div class="section-head"><div><div class="section-title"><span class="section-no">03</span><h2>Kontrol geçmişi</h2></div><p class="section-sub">Her sayfada <?= $historyPerPage ?> kayıt gösteriliyor · toplam <?= $historyTotal ?> kayıt</p></div><span class="page-label">Sayfa <?= $historyPage ?> / <?= $historyPages ?></span></div><div class="table-shell history-table"><table class="site-table"><thead><tr><th>Zaman</th><th>Site</th><th>Googlebot</th><th>Kullanıcı</th><th>HTTP</th><th>Alternate</th><th>Not</th></tr></thead><tbody><?php if (!$history): ?><tr><td colspan="7" class="empty-state">Henüz kontrol kaydı yok.</td></tr><?php endif; ?><?php foreach ($history as $row): ?><tr><td class="time"><?= h(local_time($row['ts'])) ?></td><td><span class="site-url"><?= h($row['site']) ?></span></td><td><?= status_badge($row['status']) ?></td><td><?= status_badge($row['ustatus'] ?? '-') ?></td><td class="http"><?= h($row['http']) ?></td><td class="expect"><?= h($row['alt'] ?: '-') ?></td><td class="status-note"><?= h($row['note'] ?: '-') ?></td></tr><?php endforeach; ?></tbody></table></div><nav class="pagination" aria-label="Kontrol geçmişi sayfaları"><?php if ($historyPage > 1): ?><a href="?page=<?= $historyPage - 1 ?>#history">Önceki</a><?php endif; ?><?php for ($p = 1; $p <= $historyPages; $p++): if ($p === $historyPage): ?><span class="current"><?= $p ?></span><?php elseif ($p <= 3 || $p > $historyPages - 2 || abs($p - $historyPage) <= 1): ?><a href="?page=<?= $p ?>#history"><?= $p ?></a><?php elseif ($p === 4 || $p === $historyPages - 2): ?><span class="ellipsis">…</span><?php endif; endfor; ?><?php if ($historyPage < $historyPages): ?><a href="?page=<?= $historyPage + 1 ?>#history">Sonraki</a><?php endif; ?></nav></section>
   <div class="footer-note">Son ölçüm zamanları Europe/Istanbul · HTTP kontrolü Googlebot User-Agent ile yapılır</div>
 </main>
+<script>
+(function(){
+  const form=document.getElementById('run-form'), button=document.getElementById('run-button'), box=document.getElementById('run-progress'), title=document.getElementById('run-progress-title'), count=document.getElementById('run-progress-count'), bar=document.getElementById('run-progress-bar'), current=document.getElementById('run-progress-current');
+  if(!form) return;
+  function showError(text){box.hidden=false;box.classList.add('error');title.textContent='Kontrol başlatılamadı';count.textContent='';current.textContent=text;bar.style.width='0%';button.disabled=false;button.textContent='Tüm siteleri kontrol et';}
+  function showJob(job){
+    box.hidden=false; box.classList.remove('error');
+    const total=Number(job.total||0), done=Number(job.completed||0), percent=total ? Math.round(done*100/total) : 0;
+    title.textContent=job.status==='completed' ? 'Kontrol tamamlandı' : (job.status==='queued' ? 'Kontrol sıraya alındı' : 'Kontrol çalışıyor');
+    count.textContent=done+' / '+total; bar.style.width=percent+'%'; current.textContent=job.status==='completed' ? 'Tüm sitelerin sonuçları işlendi. Telegram kanıtları gönderildi.' : (job.current ? job.current+' kontrol ediliyor...' : 'Kontrol hazırlanıyor...');
+    if(job.status==='completed'){button.disabled=false;button.textContent='Tüm siteleri kontrol et';return;}
+    button.disabled=true;button.textContent='Kontrol çalışıyor...';
+    setTimeout(function(){poll(job.id)},1000);
+  }
+  async function poll(id){try{const response=await fetch('?job='+encodeURIComponent(id),{cache:'no-store'});const job=await response.json();showJob(job);}catch(e){showError('İlerleme bilgisi alınamadı. Sunucu işi çalışmaya devam ediyor olabilir.');}}
+  form.addEventListener('submit',async function(event){event.preventDefault();button.disabled=true;button.textContent='Kontrol başlatılıyor...';box.hidden=false;title.textContent='Kontrol başlatılıyor';count.textContent='';current.textContent='Sunucu işi hazırlanıyor...';bar.style.width='0%';try{const response=await fetch(location.pathname,{method:'POST',body:new FormData(form),headers:{'X-Requested-With':'XMLHttpRequest'}});const data=await response.json();if(!data.ok) throw new Error(data.error||'Bilinmeyen hata');poll(data.job_id);}catch(e){showError(e.message);}});
+  fetch('?job=active',{cache:'no-store'}).then(r=>r.json()).then(job=>{if(job&&job.id&&job.status==='running') poll(job.id);}).catch(function(){});
+})();
+</script>
 </body></html>
