@@ -193,8 +193,10 @@ function gb_tg_send_evidence(array $tg, array $result, array $capture): bool {
     $file = $capture['combined']['path'] ?? '';
     if ($tk === '' || $cid === '' || !is_file($file)) return false;
     $caption = gb_emoji($result['status']) . ' ' . $result['name'] .
+        "\nSite: " . ($result['url'] ?? '-') .
         "\nGooglebot: " . $result['status'] . ' | Kullanici: ' . ($result['ustatus'] ?? '-') .
-        "\nHTTP " . ($result['http'] ?? 0) . ' | alt: ' . ($result['alt'] ? implode(', ', $result['alt']) : '-') .
+        "\nHTTP " . ($result['http'] ?? 0) . ' | Beklenen alt: ' . gb_host_of($result['expect'] ?? '') .
+        "\nGorulen alt: " . ($result['alt'] ? implode(', ', $result['alt']) : '-') .
         ($result['note'] !== '' ? "\nNot: " . $result['note'] : '');
     $ch = curl_init("https://api.telegram.org/bot$tk/sendPhoto");
     curl_setopt_array($ch, [
@@ -256,6 +258,7 @@ function gb_process(array $site, array $cfg, string $dbFile): array {
     }
     $r['name'] = $name;
     $r['url'] = $url;
+    $r['expect'] = $site['expect'] ?? '';
     $r['previous_status'] = $oldSt;
     $r['previous_user_status'] = $oldUserSt;
     return $r;
