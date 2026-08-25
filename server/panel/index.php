@@ -268,7 +268,7 @@ body{background-color:var(--canvas);background-image:linear-gradient(rgba(73,215
     const total=Number(job.total||0), done=Number(job.completed||0), percent=total ? Math.round(done*100/total) : 0;
     title.textContent=job.status==='completed' ? 'Kontrol tamamlandı' : (job.status==='queued' ? 'Kontrol sıraya alındı' : 'Kontrol çalışıyor');
     count.textContent=done+' / '+total; bar.style.width=percent+'%'; current.textContent=job.status==='completed' ? 'Tüm sitelerin sonuçları işlendi. Telegram kanıtları gönderildi.' : (job.current ? job.current+' kontrol ediliyor...' : 'Kontrol hazırlanıyor...');
-    if(job.status==='completed'){button.disabled=false;button.textContent='Tüm siteleri kontrol et';return;}
+    if(job.status==='completed'){button.disabled=false;button.textContent='Tüm siteleri kontrol et';setTimeout(function(){location.reload()},900);return;}
     button.disabled=true;button.textContent='Kontrol çalışıyor...';
     setTimeout(function(){poll(job.id)},1000);
   }
