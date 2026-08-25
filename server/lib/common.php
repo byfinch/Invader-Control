@@ -55,6 +55,9 @@ function gb_fetch(string $url, string $ua, int $timeout = 15): array {
 }
 
 function gb_host_of(string $href): string {
+    $href = trim($href);
+    if ($href === '') return '';
+    if (!preg_match('~^[a-z][a-z0-9+.-]*://~i', $href)) $href = 'https://' . $href;  /* çıplak domain destekle */
     $h = strtolower((string) parse_url($href, PHP_URL_HOST));
     return preg_replace('/^www\./', '', $h);
 }
