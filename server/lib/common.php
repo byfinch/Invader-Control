@@ -143,7 +143,7 @@ function gb_check(array $site): array {
         $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => 'alternate: ' . implode(', ', $alts)];
     }
 
-    /* normal kullanici gorunumu: ayri sinyal */
+    /* normal kullanıcı görünümü: ayrı sinyal */
     $r['ustatus'] = 'OK'; $r['usize'] = 0;
     try {
         [$uc, $uh, $ub, $ue] = gb_fetch($url, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', 12);
@@ -194,9 +194,9 @@ function gb_tg_send_evidence(array $tg, array $result, array $capture): bool {
     if ($tk === '' || $cid === '' || !is_file($file)) return false;
     $caption = gb_emoji($result['status']) . ' ' . $result['name'] .
         "\nSite: " . ($result['url'] ?? '-') .
-        "\nGooglebot: " . $result['status'] . ' | Kullanici: ' . ($result['ustatus'] ?? '-') .
+        "\nGooglebot: " . $result['status'] . ' | Kullanıcı: ' . ($result['ustatus'] ?? '-') .
         "\nHTTP " . ($result['http'] ?? 0) . ' | Beklenen alt: ' . gb_host_of($result['expect'] ?? '') .
-        "\nGorulen alt: " . ($result['alt'] ? implode(', ', $result['alt']) : '-') .
+        "\nGörülen alt: " . ($result['alt'] ? implode(', ', $result['alt']) : '-') .
         ($result['note'] !== '' ? "\nNot: " . $result['note'] : '');
     $ch = curl_init("https://api.telegram.org/bot$tk/sendPhoto");
     curl_setopt_array($ch, [

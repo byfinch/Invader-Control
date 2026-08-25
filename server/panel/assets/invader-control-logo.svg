@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 96" role="img" aria-labelledby="title">
+  <title id="title">Invader Control</title>
+  <image href="invader-control-mark.svg" x="0" y="16" width="64" height="64"/>
+  <path d="M88 18v60" stroke="#2e4a5c" stroke-width="2"/>
+  <text x="110" y="48" fill="#f4f7fa" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="800" letter-spacing="3">INVADER</text>
+  <text x="112" y="75" fill="#10bfd0" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="700" letter-spacing="8">CONTROL</text>
+</svg>

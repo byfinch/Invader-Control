@@ -10,7 +10,7 @@ ini_set('display_errors', '0');
 error_reporting(E_ALL);
 
 try {
-    if (!is_file($LIB)) die('Sunucu dosyasi eksik: ortak kutuphane bulunamadi.');
+    if (!is_file($LIB)) die('Sunucu dosyası eksik: ortak kütüphane bulunamadı.');
     require $LIB;
 
     session_set_cookie_params([
@@ -47,14 +47,14 @@ try {
             header('Location: ' . $_SERVER['PHP_SELF']);
             exit;
         }
-        $loginError = 'Kullanici adi veya sifre hatali.';
+        $loginError = 'Kullanıcı adı veya şifre hatalı.';
     }
 
     if (empty($_SESSION['auth'])) {
         $error = $loginError !== '' ? '<p class="login-error">' . htmlspecialchars($loginError, ENT_QUOTES, 'UTF-8') . '</p>' : '';
         die("<!doctype html><html lang='tr'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Invader Control</title>
-        <style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d1117;color:#e6edf3;font:14px system-ui,-apple-system,sans-serif}.login{width:min(390px,calc(100% - 32px));border:1px solid #263241;background:#151b23;padding:30px}.mark{display:flex;align-items:center;gap:12px;margin-bottom:34px}.mark-icon{display:grid;place-items:center;width:34px;height:34px;background:#b9f227;color:#10150b;font-weight:800;font-size:12px}.mark strong{display:block;letter-spacing:1.2px;font-size:14px}.mark span{display:block;margin-top:4px;color:#7d8a99;font-size:10px;letter-spacing:1.5px}.login h1{font-size:23px;font-weight:600;margin:0 0 8px}.login p{color:#7d8a99}.login-error{color:#ff8b9a!important}.login label{display:block;color:#9aa7b6;font-size:12px;margin:18px 0 7px}.login input{width:100%;padding:11px;border:1px solid #354253;background:#0d1117;color:#e6edf3;border-radius:3px}.login button{width:100%;margin-top:22px;padding:11px;border:0;background:#b9f227;color:#10150b;font-weight:700;border-radius:3px;cursor:pointer}</style></head><body>
-        <form class='login' method='post'><div class='mark'><div class='mark-icon'>IC</div><div><strong>INVADER CONTROL</strong><span>GOOGLEBOT VIEW MONITOR</span></div></div><h1>Kontrol merkezine giris</h1><p>Izleme paneline devam etmek icin kimlik bilgilerinizi girin.</p>$error<label>Kullanici adi</label><input name='login_user' autocomplete='username' autofocus><label>Sifre</label><input type='password' name='login_pass' autocomplete='current-password'><button>Panele gir</button></form></body></html>");
+        <style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d1117;color:#e6edf3;font:14px system-ui,-apple-system,sans-serif}.login{width:min(390px,calc(100% - 32px));border:1px solid #263241;background:#151b23;padding:30px}.login-logo{display:block;width:245px;max-width:100%;height:auto;margin:0 0 34px}.login h1{font-size:23px;font-weight:600;margin:0 0 8px}.login p{color:#7d8a99}.login-error{color:#ff8b9a!important}.login label{display:block;color:#9aa7b6;font-size:12px;margin:18px 0 7px}.login input{width:100%;padding:11px;border:1px solid #354253;background:#0d1117;color:#e6edf3;border-radius:3px}.login button{width:100%;margin-top:22px;padding:11px;border:0;background:#49d7ff;color:#061117;font-weight:700;border-radius:3px;cursor:pointer}</style></head><body>
+        <form class='login' method='post'><img class='login-logo' src='/assets/invader-control-logo.svg' alt='Invader Control'><h1>Kontrol merkezine giriş</h1><p>İzleme paneline devam etmek için kimlik bilgilerinizi girin.</p>$error<label>Kullanıcı adı</label><input name='login_user' autocomplete='username' autofocus><label>Şifre</label><input type='password' name='login_pass' autocomplete='current-password'><button>Panele gir</button></form></body></html>");
     }
 
     function h(?string $value): string { return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8'); }
@@ -74,7 +74,7 @@ try {
         return $json !== false && @file_put_contents($file, $json) !== false;
     }
     function status_label(string $status): string {
-        return ['OK' => 'OK', 'OBSERVED' => 'GOZLEMLENDI', 'DOWN' => 'DUSUK', 'BLOCKED' => 'ENGELLI', 'ERROR' => 'HATA', 'EMPTY' => 'BOS', '-' => 'BEKLIYOR'][$status] ?? $status;
+        return ['OK' => 'OK', 'OBSERVED' => 'GÖZLEMLENDİ', 'DOWN' => 'DÜŞÜK', 'BLOCKED' => 'ENGELLİ', 'ERROR' => 'HATA', 'EMPTY' => 'BOŞ', '-' => 'BEKLİYOR'][$status] ?? $status;
     }
     function status_class(string $status): string {
         return ['OK' => 'ok', 'OBSERVED' => 'info', 'DOWN' => 'down', 'BLOCKED' => 'warn', 'ERROR' => 'error', 'EMPTY' => 'warn', '-' => 'idle'][$status] ?? 'idle';
@@ -90,7 +90,7 @@ try {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['act'] ?? '';
         if ($action !== '' && !hash_equals($csrf, (string) ($_POST['csrf'] ?? ''))) {
-            $error = 'Oturum dogrulamasi gecersiz. Sayfayi yenileyin.';
+            $error = 'Oturum doğrulaması geçersiz. Sayfayı yenileyin.';
             $action = '';
         }
         try {
@@ -105,21 +105,21 @@ try {
                 foreach (($CFG['sites'] ?? []) as $old) {
                     if (gb_url_key($old['url'] ?? '') === gb_url_key($url)) { $duplicate = true; break; }
                 }
-                if ($host === '' || $expectedHost === '') $error = 'URL ve beklenen alternate alani zorunlu.';
-                elseif ($duplicate) $error = 'Bu URL zaten izleniyor. Ayni URL ikinci kez eklenemez.';
+                if ($host === '' || $expectedHost === '') $error = 'URL ve beklenen alternate alanı zorunlu.';
+                elseif ($duplicate) $error = 'Bu URL zaten izleniyor. Aynı URL ikinci kez eklenemez.';
                 else {
                     $CFG['sites'] ??= [];
                     $CFG['sites'][] = ['name' => $name ?: $host, 'url' => $url, 'expect' => $expectedHost];
                     if (save_cfg($CFG, $CFG_FILE)) $message = 'Site izleme listesine eklendi.';
-                    else $error = 'Config dosyasi yazilamadi.';
+                    else $error = 'Yapılandırma dosyası yazılamadı.';
                 }
             } elseif ($action === 'del_site') {
                 $index = (int) ($_POST['idx'] ?? -1);
                 if (isset($CFG['sites'][$index])) {
                     $removed = $CFG['sites'][$index]['name'] ?? $CFG['sites'][$index]['url'];
                     array_splice($CFG['sites'], $index, 1);
-                    if (save_cfg($CFG, $CFG_FILE)) $message = 'Izleme kaldirildi: ' . $removed;
-                    else $error = 'Config dosyasi yazilamadi.';
+                    if (save_cfg($CFG, $CFG_FILE)) $message = 'İzleme kaldırıldı: ' . $removed;
+                    else $error = 'Yapılandırma dosyası yazılamadı.';
                 }
             } elseif ($action === 'run_now') {
                 @set_time_limit(300);
@@ -136,7 +136,7 @@ try {
                     }
                 }
                 $sent = $runResults ? gb_notify_run($CFG, $runResults) : false;
-                $message = "Kontrol tamamlandi\n" . implode("\n", $results) . "\nTelegram: " . ($sent ? 'gonderildi' : 'gonderilemedi');
+                $message = "Kontrol tamamlandı\n" . implode("\n", $results) . "\nTelegram kanıtı: " . ($sent ? 'gönderildi' : 'gönderilemedi');
             }
         } catch (Throwable $e) { $error = 'Islem hatasi: ' . $e->getMessage(); }
     }
@@ -177,7 +177,7 @@ catch (Throwable $fatal) {
 <!doctype html>
 <html lang="tr">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <title>Invader Control</title>
 <style>
 :root{--canvas:#eef1f4;--paper:#fff;--ink:#17202b;--muted:#718096;--line:#dce2e8;--navy:#101923;--lime:#b9f227;--blue:#2e6cf6;--red:#d84a5b;--amber:#b77712;--shadow:0 8px 24px rgba(18,31,45,.06)}
@@ -196,18 +196,19 @@ button,input{font:inherit}.topbar{height:66px;padding:0 max(24px,calc((100% - 11
 body{background-color:var(--canvas);background-image:linear-gradient(rgba(73,215,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(73,215,255,.025) 1px,transparent 1px);background-size:32px 32px;color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 .topbar{height:70px;background:rgba(8,13,19,.96);border-bottom:1px solid #294252;box-shadow:0 1px 0 rgba(156,255,87,.18)}
 .brand-mark{background:transparent;border:1px solid var(--lime);color:var(--lime);width:34px;height:34px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}.brand-copy strong{letter-spacing:1.8px}.brand-copy span{color:#8296a8}.top-actions form{display:block}.top-actions .btn{color:#a9bdce;border-color:#304453}
+.brand-logo{display:block;width:190px;height:auto}
 .wrap{max-width:1240px;padding-top:42px}.intro{margin-bottom:30px}.intro h1{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;font-size:34px;letter-spacing:-1px;font-weight:600;margin:8px 0 8px}.intro p{font-size:13px;color:#91a6b8}.eyebrow,.section-no{color:var(--blue)}
 .btn{border-radius:2px}.btn-primary{background:var(--blue);color:#061117}.btn-dark{background:#182532;border-color:#2d4555;color:#d9e8f1}
 .summary{border:1px solid var(--line);border-top:2px solid var(--blue);box-shadow:var(--shadow);background:var(--paper)}.metric{background:var(--paper);padding:20px 22px;border-color:var(--line)}.metric-value{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:28px;font-weight:500}.metric-value.good{color:var(--lime)}.metric-value.bad{color:var(--red)}
 .section{margin-top:38px}.section-head{margin-bottom:14px}.section-title h2{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:17px;letter-spacing:-.3px;font-weight:600}.section-sub{font-size:12px;color:#8297aa}.table-shell{box-shadow:var(--shadow);border-color:var(--line)}.site-table{background:var(--paper)}.site-table th{background:#111d27;color:#7891a4;padding:12px 15px;border-color:var(--line)}.site-table td{padding:16px 15px;border-color:var(--line)}.site-table tbody tr:hover{background:#13202b}.site-name{font-size:13px}.expect,.alt-cell,.time,.http{font-size:11px}.status{font-size:11px}.status-note{color:#71889a}.btn-danger{color:var(--red);border-color:#733541}.history{margin-top:40px}.page-label{font-size:11px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.pagination{display:flex;align-items:center;justify-content:flex-end;gap:5px;margin-top:14px}.pagination a,.pagination span{min-width:30px;height:30px;padding:6px 9px;text-align:center;border:1px solid var(--line);color:var(--muted);text-decoration:none;font-size:12px;background:var(--paper)}.pagination a:hover{border-color:var(--blue);color:var(--blue)}.pagination .current{background:var(--blue);border-color:var(--blue);color:#061117}.pagination .ellipsis{border-color:transparent;background:transparent;min-width:16px}.footer-note{text-align:left;border-top:1px solid var(--line);padding-top:14px;color:#647b8d}
 .add-pop{background:var(--paper2);border-color:#2b4251}.field input{background:#080e14;border-color:#304553;color:var(--ink)}.field span{color:#8398aa}
 @media(max-width:850px){.intro h1{font-size:30px}.summary{grid-template-columns:1fr 1fr}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}}
-@media(max-width:560px){.topbar{height:64px}.wrap{padding:30px 14px 42px}.intro h1{font-size:26px}.intro p{max-width:330px}.summary{grid-template-columns:1fr 1fr}.metric{padding:15px 14px}.metric-value{font-size:23px}.section-title h2{font-size:16px}.pagination{justify-content:center}.footer-note{font-size:10px}.history-table{overflow-x:auto}}
+@media(max-width:560px){.topbar{height:64px}.brand-logo{width:160px}.wrap{padding:30px 14px 42px}.intro h1{font-size:26px}.intro p{max-width:330px}.summary{grid-template-columns:1fr 1fr}.metric{padding:15px 14px}.metric-value{font-size:23px}.section-title h2{font-size:16px}.pagination{justify-content:center}.footer-note{font-size:10px}.history-table{overflow-x:auto}}
 </style>
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><div class="brand-mark">IC</div><div class="brand-copy"><strong>INVADER CONTROL</strong><span>GOOGLEBOT VIEW MONITOR</span></div></div>
+  <div class="brand"><img class="brand-logo" src="/assets/invader-control-logo.svg" alt="Invader Control"></div>
   <div class="top-actions"><form method="post"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><button class="btn btn-quiet" name="logout" value="1">Çıkış</button></form></div>
 </header>
 <main class="wrap">

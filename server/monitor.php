@@ -12,7 +12,7 @@ $cmd = $argv[1] ?? 'run';
 
 if ($cmd === 'test' && isset($argv[2])) {
     $r = gb_check(['url' => $argv[2], 'expect' => '']);
-    printf("%-10s HTTP %d | alt=%s | %s | kullanici=%s(%d b)\n", $r['status'], $r['http'], $r['alt'] ? implode(',', $r['alt']) : '-', $r['note'], $r['ustatus'], $r['usize']);
+    printf("%-10s HTTP %d | alt=%s | %s | kullanıcı=%s(%d b)\n", $r['status'], $r['http'], $r['alt'] ? implode(',', $r['alt']) : '-', $r['note'], $r['ustatus'], $r['usize']);
     exit(0);
 }
 
@@ -23,11 +23,11 @@ foreach ($CFG['sites'] as $s) {
     try {
         $r = gb_process($s, $CFG, "$BASE/data/gbwatch.db");
         $runResults[] = $r;
-        printf("%-10s %s | HTTP %d | alt=%s | %s | kullanici=%s%s\n", $r['status'], $s['url'], $r['http'],
+        printf("%-10s %s | HTTP %d | alt=%s | %s | kullanıcı=%s%s\n", $r['status'], $s['url'], $r['http'],
             $r['alt'] ? implode(',', $r['alt']) : '-', $r['note'], $r['ustatus'] ?? '-', '');
     } catch (Throwable $e) {
         $runResults[] = ['status' => 'ERROR', 'ustatus' => 'ERROR', 'http' => 0, 'alt' => [], 'note' => $e->getMessage(), 'name' => $s['name'] ?? $s['url']];
         printf("HATA       %s | %s\n", $s['url'], $e->getMessage());
     }
 }
-if ($runResults) printf("Telegram: %s\n", gb_notify_run($CFG, $runResults) ? 'gonderildi' : 'gonderilemedi');
+if ($runResults) printf("Telegram: %s\n", gb_notify_run($CFG, $runResults) ? 'gönderildi' : 'gönderilemedi');
