@@ -50,7 +50,7 @@ try {
         return $j !== false && @file_put_contents($f, $j) !== false;
     }
     function badge(string $st): string {
-        $c = ['OK' => '#16a34a', 'DOWN' => '#dc2626', 'BLOCKED' => '#d97706', 'ERROR' => '#6b7280', 'EMPTY' => '#a16207'][$st] ?? '#6b7280';
+        $c = ['OK' => '#16a34a', 'OBSERVED' => '#2563eb', 'DOWN' => '#dc2626', 'BLOCKED' => '#d97706', 'ERROR' => '#6b7280', 'EMPTY' => '#a16207'][$st] ?? '#6b7280';
         return "<span style='background:$c;color:#fff;padding:2px 9px;border-radius:4px;font-size:12px;font-weight:600'>$st</span>";
     }
 
@@ -68,6 +68,9 @@ try {
                 $expect = preg_replace('~^www\.~', '', preg_replace('~^https?://~', '', $expect));
                 $host = gb_host_of($url); $ehost = gb_host_of('https://' . $expect);
                 if ($host === '' || $ehost === '') { $err = 'URL ve beklenen alan adi zorunlu.'; }
+                elseif (count(array_filter($CFG['sites'] ?? [], fn($old) => gb_url_key($old['url'] ?? '') === gb_url_key($url))) > 0) {
+                    $err = 'Bu URL zaten izleniyor. Ayni URL iki kez eklenemez; mevcut kaydi duzenleyin veya silin.';
+                }
                 else {
                     $CFG['sites'] ??= [];
                     $CFG['sites'][] = ['name' => $name !== '' ? $name : $host, 'url' => $url, 'expect' => $ehost];
@@ -116,7 +119,7 @@ try {
         gb_init_db($DB_FILE);
         foreach (gb_db($DB_FILE)->query("SELECT site,status,since FROM state")->fetchAll() as $r) $stMap[$r['site']] = $r;
         foreach (gb_db($DB_FILE)->query("SELECT c.* FROM checks c JOIN (SELECT site,MAX(id) mid FROM checks GROUP BY site) x ON x.mid=c.id")->fetchAll() as $r) $last[$r['site']] = $r;
-        $history = gb_db($DB_FILE)->query("SELECT site,ts,status,http,alt,note FROM checks ORDER BY id DESC LIMIT 60")->fetchAll();
+        $history = gb_db($DB_FILE)->query("SELECT site,ts,status,http,alt,note,ustatus FROM checks ORDER BY id DESC LIMIT 60")->fetchAll();
     } catch (Throwable $e) {
         $err .= ($err ? ' | ' : '') . 'Veritabani: ' . $e->getMessage();
     }
@@ -124,6 +127,14 @@ try {
 } catch (Throwable $fatal) {
     http_response_code(500);
     die('<meta charset="utf-8"><body style="font-family:monospace;padding:40px"><h2>Sistem hatasi</h2><pre>' . htmlspecialchars($fatal->getMessage()) . '</pre></body>');
+}
+
+$duplicateUrls = [];
+$seenUrls = [];
+foreach (($CFG['sites'] ?? []) as $s) {
+    $key = gb_url_key($s['url'] ?? '');
+    if ($key !== '' && isset($seenUrls[$key])) $duplicateUrls[$key] = true;
+    $seenUrls[$key] = true;
 }
 ?>
 <!doctype html><html lang="tr"><head><meta charset="utf-8">
@@ -159,6 +170,7 @@ form.inline{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 
 <?php if ($msg): ?><div class="msg"><?= h($msg) ?></div><?php endif; ?>
 <?php if ($err): ?><div class="errbox"><?= h($err) ?></div><?php endif; ?>
+<?php if ($duplicateUrls): ?><div class="errbox">Ayni URL birden fazla kez kayitli. Son kontrolde kayitlar birbirinin sonucunu eziyor. Tekrarlanan satiri silip yeniden kontrol et.</div><?php endif; ?>
 
 <div class="card" style="display:flex;justify-content:space-between;align-items:center">
   <div><h2 style="margin:0">Durum</h2>

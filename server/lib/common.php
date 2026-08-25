@@ -24,7 +24,11 @@ function gb_init_db(string $dbFile): void {
         site TEXT PRIMARY KEY,
         status TEXT NOT NULL,
         since TEXT DEFAULT (datetime('now')),
-        blocked_streak INTEGER DEFAULT 0)");
+        blocked_streak INTEGER DEFAULT 0,
+        user_status TEXT DEFAULT '-')");
+    $stateCols = gb_db($dbFile)->query("PRAGMA table_info(state)")->fetchAll();
+    $stateNames = array_column($stateCols, 'name');
+    if (!in_array('user_status', $stateNames, true)) gb_db($dbFile)->exec("ALTER TABLE state ADD COLUMN user_status TEXT DEFAULT '-'");
     /* migration: eski tabloya ustatus/usize ekle */
     $cols = gb_db($dbFile)->query("PRAGMA table_info(checks)")->fetchAll();
     $names = array_column($cols, 'name');
@@ -42,8 +46,8 @@ function gb_fetch(string $url, string $ua, int $timeout = 15): array {
         CURLOPT_CONNECTTIMEOUT => 10,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_HEADER => true,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_SSL_VERIFYHOST => 0,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
     ]);
     $raw = curl_exec($ch);
     $err = curl_error($ch);
@@ -62,12 +66,42 @@ function gb_host_of(string $href): string {
     return preg_replace('/^www\./', '', $h);
 }
 
+function gb_url_key(string $url): string {
+    $url = trim($url);
+    if (!preg_match('~^https?://~i', $url)) $url = 'https://' . $url;
+    $p = parse_url($url);
+    if (!is_array($p) || empty($p['host'])) return strtolower($url);
+    $scheme = strtolower($p['scheme'] ?? 'https');
+    $host = strtolower($p['host']);
+    $port = isset($p['port']) ? ':' . $p['port'] : '';
+    $path = $p['path'] ?? '/';
+    if ($path === '') $path = '/';
+    $query = isset($p['query']) ? '?' . $p['query'] : '';
+    return $scheme . '://' . $host . $port . $path . $query;
+}
+
 function gb_alternates(string $body): array {
     $alts = [];
-    if (preg_match_all('/<link\b[^>]*rel=["\']alternate["\'][^>]*>/i', $body, $m)) {
-        foreach ($m[0] as $tag) {
-            if (preg_match('/href=["\']([^"\']+)["\']/i', $tag, $h)) {
-                $host = gb_host_of($h[1]);
+    if (class_exists('DOMDocument')) {
+        $previous = libxml_use_internal_errors(true);
+        $dom = new DOMDocument();
+        if (@$dom->loadHTML($body, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING)) {
+            foreach ($dom->getElementsByTagName('link') as $link) {
+                $rels = preg_split('/\s+/', strtolower(trim($link->getAttribute('rel'))));
+                if (in_array('alternate', $rels, true)) {
+                    $host = gb_host_of($link->getAttribute('href'));
+                    if ($host !== '') $alts[] = $host;
+                }
+            }
+        }
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+    }
+    if (!$alts && preg_match_all('/<link\b[^>]*>/i', $body, $tags)) {
+        foreach ($tags[0] as $tag) {
+            if (!preg_match('/\brel\s*=\s*["\'][^"\']*\balternate\b[^"\']*["\']/i', $tag)) continue;
+            if (preg_match('/\bhref\s*=\s*["\']([^"\']+)["\']/i', $tag, $href)) {
+                $host = gb_host_of($href[1]);
                 if ($host !== '') $alts[] = $host;
             }
         }
@@ -98,7 +132,9 @@ function gb_check(array $site): array {
 
     $alts = gb_alternates($body);
     $expect = gb_host_of((string) ($site['expect'] ?? ''));
-    if ($expect !== '' && in_array($expect, $alts, true)) {
+    if ($expect === '') {
+        $r = ['status' => 'OBSERVED', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => $alts ? '' : 'alternate link yok'];
+    } elseif (in_array($expect, $alts, true)) {
         $r = ['status' => 'OK', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => ''];
     } elseif (!$alts) {
         $hasHtml = stripos($body, '<body') !== false || stripos($body, '<title') !== false;
@@ -149,32 +185,35 @@ function gb_process(array $site, array $cfg, string $dbFile): array {
     gb_db($dbFile)->prepare("INSERT INTO checks(site,status,http,size,alt,note,ustatus,usize) VALUES(?,?,?,?,?,?,?,?)")
         ->execute([$url, $r['status'], $r['http'], $r['size'], implode(',', $r['alt']), $r['note'], $r['ustatus'] ?? '-', $r['usize'] ?? 0]);
 
-    $q = gb_db($dbFile)->prepare("SELECT status, blocked_streak FROM state WHERE site=?");
+    $q = gb_db($dbFile)->prepare("SELECT status, user_status, blocked_streak FROM state WHERE site=?");
     $q->execute([$url]);
     $row = $q->fetch();
     $oldSt = $row['status'] ?? null;
+    $oldUserSt = $row['user_status'] ?? null;
     $streak = (int) ($row['blocked_streak'] ?? 0);
     $alertMsg = null;
+    $userSt = $r['ustatus'] ?? '-';
+    $newStreak = $r['status'] === 'BLOCKED' ? $streak + 1 : 0;
+    $gbChanged = $oldSt !== null && $oldSt !== $r['status'];
+    $userChanged = $oldUserSt !== null && $oldUserSt !== $userSt;
 
     if ($oldSt === null) {
-        gb_db($dbFile)->prepare("INSERT INTO state(site,status) VALUES(?,?)")->execute([$url, $r['status']]);
-    } elseif ($oldSt !== $r['status']) {
-        if ($r['status'] === 'BLOCKED') {
-            $streak++;
-            if ($streak >= 3) { $alertMsg = "site:$name"; $streak = 0; }
-            gb_db($dbFile)->prepare("UPDATE state SET status=?, blocked_streak=?, since=datetime('now') WHERE site=?")
-                ->execute([$r['status'], $streak, $url]);
-        } else {
-            $alertMsg = "site:$name";
-            gb_db($dbFile)->prepare("UPDATE state SET status=?, blocked_streak=0, since=datetime('now') WHERE site=?")
-                ->execute([$r['status'], $url]);
-        }
+        gb_db($dbFile)->prepare("INSERT INTO state(site,status,user_status,blocked_streak) VALUES(?,?,?,?)")
+            ->execute([$url, $r['status'], $userSt, $newStreak]);
+    } else {
+        if ($r['status'] === 'BLOCKED' && $newStreak >= 3 && $streak < 3) $alertMsg = "site:$name";
+        elseif ($r['status'] !== 'BLOCKED' && ($gbChanged || $userChanged)) $alertMsg = "site:$name";
+        elseif ($r['status'] === 'BLOCKED' && $userChanged) $alertMsg = "site:$name";
+
+        $since = ($gbChanged || $userChanged) ? ", since=datetime('now')" : '';
+        gb_db($dbFile)->prepare("UPDATE state SET status=?, user_status=?, blocked_streak=?$since WHERE site=?")
+            ->execute([$r['status'], $userSt, $newStreak, $url]);
     }
 
     if ($alertMsg !== null) {
         gb_tg_send($cfg['telegram'] ?? [], gb_emoji($r['status']) . " " . $name .
-            "\nGooglebot: " . $oldSt . " -> " . $r['status'] .
-            "\nKullanici: " . ($r['ustatus'] ?? '-') .
+            "\nGooglebot: " . ($oldSt ?? '-') . " -> " . $r['status'] .
+            "\nKullanici: " . ($oldUserSt ?? '-') . " -> " . $userSt .
             "\nHTTP " . $r['http'] . " | alt: " . ($r['alt'] ? implode(', ', $r['alt']) : '-') .
             ($r['note'] !== '' ? "\nNot: " . $r['note'] : ''));
     }
