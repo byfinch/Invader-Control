@@ -51,7 +51,7 @@ try {
     }
 
     if (empty($_SESSION['auth'])) {
-        $error = $loginError !== '' ? '<p class="login-error">' . h($loginError) . '</p>' : '';
+        $error = $loginError !== '' ? '<p class="login-error">' . htmlspecialchars($loginError, ENT_QUOTES, 'UTF-8') . '</p>' : '';
         die("<!doctype html><html lang='tr'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Invader Control</title>
         <style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d1117;color:#e6edf3;font:14px system-ui,-apple-system,sans-serif}.login{width:min(390px,calc(100% - 32px));border:1px solid #263241;background:#151b23;padding:30px}.mark{display:flex;align-items:center;gap:12px;margin-bottom:34px}.mark-icon{display:grid;place-items:center;width:34px;height:34px;background:#b9f227;color:#10150b;font-weight:800;font-size:12px}.mark strong{display:block;letter-spacing:1.2px;font-size:14px}.mark span{display:block;margin-top:4px;color:#7d8a99;font-size:10px;letter-spacing:1.5px}.login h1{font-size:23px;font-weight:600;margin:0 0 8px}.login p{color:#7d8a99}.login-error{color:#ff8b9a!important}.login label{display:block;color:#9aa7b6;font-size:12px;margin:18px 0 7px}.login input{width:100%;padding:11px;border:1px solid #354253;background:#0d1117;color:#e6edf3;border-radius:3px}.login button{width:100%;margin-top:22px;padding:11px;border:0;background:#b9f227;color:#10150b;font-weight:700;border-radius:3px;cursor:pointer}</style></head><body>
         <form class='login' method='post'><div class='mark'><div class='mark-icon'>IC</div><div><strong>INVADER CONTROL</strong><span>GOOGLEBOT VIEW MONITOR</span></div></div><h1>Kontrol merkezine giris</h1><p>Izleme paneline devam etmek icin kimlik bilgilerinizi girin.</p>$error<label>Kullanici adi</label><input name='login_user' autocomplete='username' autofocus><label>Sifre</label><input type='password' name='login_pass' autocomplete='current-password'><button>Panele gir</button></form></body></html>");
@@ -174,7 +174,7 @@ try {
 }
 catch (Throwable $fatal) {
     http_response_code(500);
-    die('<meta charset="utf-8"><body style="font-family:monospace;padding:40px"><h2>Sistem hatasi</h2><pre>' . h($fatal->getMessage()) . '</pre></body>');
+    die('<meta charset="utf-8"><body style="font-family:monospace;padding:40px"><h2>Sistem hatasi</h2><pre>' . htmlspecialchars($fatal->getMessage(), ENT_QUOTES, 'UTF-8') . '</pre></body>');
 }
 ?>
 <!doctype html>
