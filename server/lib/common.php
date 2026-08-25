@@ -190,20 +190,19 @@ function gb_capture(string $url, string $id): array {
 
 function gb_tg_send_evidence(array $tg, array $result, array $capture): bool {
     $tk = $tg['token'] ?? ''; $cid = $tg['chat_id'] ?? '';
-    $gb = $capture['googlebot']['path'] ?? ''; $user = $capture['user']['path'] ?? '';
-    if ($tk === '' || $cid === '' || !is_file($gb) || !is_file($user)) return false;
-    $media = json_encode([
-        ['type' => 'photo', 'media' => 'attach://googlebot', 'caption' => 'Googlebot | ' . $result['name']],
-        ['type' => 'photo', 'media' => 'attach://user', 'caption' => 'Normal kullanici | ' . $result['name']],
-    ], JSON_UNESCAPED_UNICODE);
-    $ch = curl_init("https://api.telegram.org/bot$tk/sendMediaGroup");
+    $file = $capture['combined']['path'] ?? '';
+    if ($tk === '' || $cid === '' || !is_file($file)) return false;
+    $caption = gb_emoji($result['status']) . ' ' . $result['name'] .
+        "\nGooglebot: " . $result['status'] . ' | Kullanici: ' . ($result['ustatus'] ?? '-') .
+        "\nHTTP " . ($result['http'] ?? 0) . ' | alt: ' . ($result['alt'] ? implode(', ', $result['alt']) : '-') .
+        ($result['note'] !== '' ? "\nNot: " . $result['note'] : '');
+    $ch = curl_init("https://api.telegram.org/bot$tk/sendPhoto");
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => [
             'chat_id' => $cid,
-            'media' => $media,
-            'googlebot' => new CURLFile($gb, 'image/png', 'googlebot.png'),
-            'user' => new CURLFile($user, 'image/png', 'user.png'),
+            'caption' => $caption,
+            'photo' => new CURLFile($file, 'image/png', 'evidence.png'),
         ],
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 45,
@@ -218,27 +217,16 @@ function gb_emoji(string $st): string {
 }
 
 function gb_notify_run(array $cfg, array $results): bool {
-    $tz = new DateTimeZone('Europe/Istanbul');
-    $now = new DateTime('now', $tz);
-    $lines = ['Invader Control | Kontrol sonucu', $now->format('d.m.Y H:i:s') . ' Türkiye saati', ''];
-    foreach ($results as $r) {
-        $lines[] = gb_emoji($r['status']) . ' ' . $r['name'];
-        $lines[] = 'Googlebot: ' . $r['status'] . ' | Kullanici: ' . ($r['ustatus'] ?? '-');
-        $lines[] = 'HTTP ' . ($r['http'] ?? 0) . ' | alt: ' . ($r['alt'] ? implode(', ', $r['alt']) : '-');
-        if (($r['note'] ?? '') !== '') $lines[] = 'Not: ' . $r['note'];
-        $lines[] = '';
-    }
     $telegram = $cfg['telegram'] ?? [];
-    $summarySent = gb_tg_send($telegram, implode("\n", $lines));
     $evidenceSent = true;
     foreach ($results as $result) {
         $capture = gb_capture($result['url'] ?? '', $result['name'] ?? 'site');
         if (!($capture['ok'] ?? false) || !gb_tg_send_evidence($telegram, $result, $capture)) $evidenceSent = false;
     }
-    return $summarySent && $evidenceSent;
+    return $evidenceSent;
 }
 
-/* Kontrol + DB kaydı + durum değişimi + telegram. Hata YUTULMAZ — çağıran try/catch yapsın */
+/* Kontrol + DB kaydı + durum takibi. Hata YUTULMAZ — çağıran try/catch yapsın */
 function gb_process(array $site, array $cfg, string $dbFile): array {
     gb_init_db($dbFile);
     $url = $site['url'];

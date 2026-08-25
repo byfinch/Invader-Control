@@ -1,12 +1,15 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { chromium } from '/opt/gbwatch/render/node_modules/playwright-core/index.mjs';
 
 const PORT = 6077;
 const ROOT = '/opt/gbwatch/data/evidence';
 const GOOGLEBOT_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
 const USER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+const execFileAsync = promisify(execFile);
 
 function reply(res, status, body) {
   res.writeHead(status, {'Content-Type': 'application/json'});
@@ -55,6 +58,14 @@ async function capture(url, id) {
   } finally {
     await browser.close();
   }
+  const combined = path.join(dir, 'evidence.png');
+  await execFileAsync('/usr/bin/montage', [
+    '-background', '#111827', '-fill', '#ffffff', '-pointsize', '22',
+    '-label', 'GOOGLEBOT', result.googlebot.path,
+    '-label', 'NORMAL KULLANICI', result.user.path,
+    '-tile', '2x1', '-geometry', '720x450+12+42', combined,
+  ]);
+  result.combined = {path: combined};
   return result;
 }
 
