@@ -7,30 +7,39 @@ $MONITOR = "$BASE/bin/monitor.php";
 session_start();
 
 $CFG = is_readable($CFG_FILE) ? (json_decode(file_get_contents($CFG_FILE), true) ?: []) : [];
-$PASS_FILE = "$BASE/panel_pass.txt";
+$PASS_FILE = "$BASE/panel_auth.json";
 
-/* --- ilk kurulum: şifre yoksa kur --- */
+/* --- ilk kurulum: kimlik dosyasi yoksa varsayilan olustur (admin) --- */
 if (!is_file($PASS_FILE)) {
-    if (isset($_POST['setup_pass'], $_POST['setup_pass2']) && $_POST['setup_pass'] !== '' && $_POST['setup_pass'] === $_POST['setup_pass2']) {
-        file_put_contents($PASS_FILE, password_hash($_POST['setup_pass'], PASSWORD_DEFAULT));
-        chmod($PASS_FILE, 0600);
-    } else {
-        die('<form method="post"><h2>Ilk kurulum — panel sifresi belirle</h2>
-             Sifre: <input type="password" name="setup_pass"> Tekrar: <input type="password" name="setup_pass2">
-             <button>Kaydet</button></form>');
-    }
+    $auth = ['user' => 'admin', 'hash' => password_hash('invader25', PASSWORD_DEFAULT)];
+    file_put_contents($PASS_FILE, json_encode($auth));
+    chmod($PASS_FILE, 0600);
 }
-$PASS_HASH = file_get_contents($PASS_FILE);
+$AUTH = json_decode(file_get_contents($PASS_FILE), true) ?: ['user' => 'admin', 'hash' => ''];
 
 /* --- login --- */
 if (isset($_POST['logout'])) { session_destroy(); header('Location: ' . $_SERVER['PHP_SELF']); exit; }
-if (isset($_POST['login_pass'])) {
-    if (password_verify($_POST['login_pass'], $PASS_HASH)) $_SESSION['auth'] = true;
-    else $login_err = 'Hatali sifre';
+if (isset($_POST['login_user'], $_POST['login_pass'])) {
+    if (hash_equals($AUTH['user'], $_POST['login_user']) && $AUTH['hash'] !== '' && password_verify($_POST['login_pass'], $AUTH['hash'])) {
+        $_SESSION['auth'] = true;
+    } else {
+        $login_err = 'Hatali kullanici adi veya sifre';
+    }
 }
 if (empty($_SESSION['auth'])) {
     $e = isset($login_err) ? "<p style='color:red'>$login_err</p>" : '';
-    die("<form method='post'><h2>GBWatch Panel</h2>$e Sifre: <input type='password' name='login_pass'> <button>Giris</button></form>");
+    die("<form method='post'><h2>GBWatch Panel</h2>
+         <p>Kullanici: <input name='login_user' autocomplete='username'></p>
+         <p>Sifre: <input type='password' name='login_pass' autocomplete='current-password'></p>
+         <button>Giris</button></form>");
+}
+if (isset($_POST['change_pass'])) {
+    $np = $_POST['new_pass'] ?? '';
+    if (strlen($np) >= 6) {
+        $AUTH['hash'] = password_hash($np, PASSWORD_DEFAULT);
+        file_put_contents($PASS_FILE, json_encode($AUTH));
+        $msg_pass = 'Sifre degistirildi.';
+    } else $msg_pass = 'Sifre en az 6 karakter olmali.';
 }
 
 /* --- DB --- */
@@ -138,6 +147,13 @@ small{color:#64748b}
 <input name="s_expect" placeholder="beklenen alanadi (ornek: milanbahis.cam)" size="30" required>
 <input name="s_name" placeholder="isim (opsiyonel)" size="16">
 <button>Ekle</button></form></div>
+
+<div class="card"><h2>Panel Sifresi</h2>
+<?php if (isset($msg_pass)) echo "<p>" . h($msg_pass) . "</p>"; ?>
+<form method="post" class="inline">
+<input type="hidden" name="change_pass" value="1">
+<input type="password" name="new_pass" placeholder="yeni sifre (min 6)" required>
+<button>Kaydet</button></form></div>
 
 <div class="card"><h2>Telegram Bildirimi</h2>
 <form method="post" class="inline">
