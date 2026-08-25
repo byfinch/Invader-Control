@@ -1,0 +1,3 @@
+RewriteEngine On
+RewriteCond %{HTTPS} !=on
+RewriteRule ^ https://invadercontrol.site%{REQUEST_URI} [R=301,L]
