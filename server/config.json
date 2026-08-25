@@ -1,0 +1,13 @@
+{
+    "telegram": {
+        "token": "",
+        "chat_id": ""
+    },
+    "sites": [
+        {
+            "name": "lamachine-labkine.com",
+            "url": "https://lamachine-labkine.com/",
+            "expect": "milanbahis.cam"
+        }
+    ]
+}
