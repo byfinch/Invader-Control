@@ -1,0 +1,15 @@
+[Unit]
+Description=GBWatch browser evidence service
+After=network-online.target
+
+[Service]
+Type=simple
+User=invadercontrol
+Group=invadercontrol
+WorkingDirectory=/opt/gbwatch
+ExecStart=/usr/bin/node /opt/gbwatch/bin/evidence-server.mjs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

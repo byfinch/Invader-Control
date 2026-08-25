@@ -18,12 +18,16 @@ if ($cmd === 'test' && isset($argv[2])) {
 
 if ($cmd !== 'run') { fwrite(STDERR, "kullanim: php monitor.php run | test <url>\n"); exit(1); }
 
+$runResults = [];
 foreach ($CFG['sites'] as $s) {
     try {
         $r = gb_process($s, $CFG, "$BASE/data/gbwatch.db");
+        $runResults[] = $r;
         printf("%-10s %s | HTTP %d | alt=%s | %s | kullanici=%s%s\n", $r['status'], $s['url'], $r['http'],
-            $r['alt'] ? implode(',', $r['alt']) : '-', $r['note'], $r['ustatus'] ?? '-', $r['alert'] ? ' [ALERT]' : '');
+            $r['alt'] ? implode(',', $r['alt']) : '-', $r['note'], $r['ustatus'] ?? '-', '');
     } catch (Throwable $e) {
+        $runResults[] = ['status' => 'ERROR', 'ustatus' => 'ERROR', 'http' => 0, 'alt' => [], 'note' => $e->getMessage(), 'name' => $s['name'] ?? $s['url']];
         printf("HATA       %s | %s\n", $s['url'], $e->getMessage());
     }
 }
+if ($runResults) printf("Telegram: %s\n", gb_notify_run($CFG, $runResults) ? 'gonderildi' : 'gonderilemedi');

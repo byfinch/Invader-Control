@@ -171,8 +171,71 @@ function gb_tg_send(array $tg, string $msg): bool {
     return ($r['ok'] ?? false) === true;
 }
 
+function gb_capture(string $url, string $id): array {
+    $ch = curl_init('http://127.0.0.1:6077/capture');
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode(['url' => $url, 'id' => $id]),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 75,
+    ]);
+    $raw = curl_exec($ch);
+    $err = curl_error($ch);
+    curl_close($ch);
+    $result = json_decode((string) $raw, true);
+    if (!is_array($result) || !($result['ok'] ?? false)) return ['ok' => false, 'error' => $err ?: ($result['error'] ?? 'capture failed')];
+    return $result;
+}
+
+function gb_tg_send_evidence(array $tg, array $result, array $capture): bool {
+    $tk = $tg['token'] ?? ''; $cid = $tg['chat_id'] ?? '';
+    $gb = $capture['googlebot']['path'] ?? ''; $user = $capture['user']['path'] ?? '';
+    if ($tk === '' || $cid === '' || !is_file($gb) || !is_file($user)) return false;
+    $media = json_encode([
+        ['type' => 'photo', 'media' => 'attach://googlebot', 'caption' => 'Googlebot | ' . $result['name']],
+        ['type' => 'photo', 'media' => 'attach://user', 'caption' => 'Normal kullanici | ' . $result['name']],
+    ], JSON_UNESCAPED_UNICODE);
+    $ch = curl_init("https://api.telegram.org/bot$tk/sendMediaGroup");
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => [
+            'chat_id' => $cid,
+            'media' => $media,
+            'googlebot' => new CURLFile($gb, 'image/png', 'googlebot.png'),
+            'user' => new CURLFile($user, 'image/png', 'user.png'),
+        ],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 45,
+    ]);
+    $response = json_decode((string) curl_exec($ch), true);
+    curl_close($ch);
+    return ($response['ok'] ?? false) === true;
+}
+
 function gb_emoji(string $st): string {
     return ['OK' => "\u{2705}", 'DOWN' => "\u{1F534}", 'BLOCKED' => "\u{26A0}", 'ERROR' => "\u{2754}"][$st] ?? "\u{2754}";
+}
+
+function gb_notify_run(array $cfg, array $results): bool {
+    $tz = new DateTimeZone('Europe/Istanbul');
+    $now = new DateTime('now', $tz);
+    $lines = ['Invader Control | Kontrol sonucu', $now->format('d.m.Y H:i:s') . ' Türkiye saati', ''];
+    foreach ($results as $r) {
+        $lines[] = gb_emoji($r['status']) . ' ' . $r['name'];
+        $lines[] = 'Googlebot: ' . $r['status'] . ' | Kullanici: ' . ($r['ustatus'] ?? '-');
+        $lines[] = 'HTTP ' . ($r['http'] ?? 0) . ' | alt: ' . ($r['alt'] ? implode(', ', $r['alt']) : '-');
+        if (($r['note'] ?? '') !== '') $lines[] = 'Not: ' . $r['note'];
+        $lines[] = '';
+    }
+    $telegram = $cfg['telegram'] ?? [];
+    $summarySent = gb_tg_send($telegram, implode("\n", $lines));
+    $evidenceSent = true;
+    foreach ($results as $result) {
+        $capture = gb_capture($result['url'] ?? '', $result['name'] ?? 'site');
+        if (!($capture['ok'] ?? false) || !gb_tg_send_evidence($telegram, $result, $capture)) $evidenceSent = false;
+    }
+    return $summarySent && $evidenceSent;
 }
 
 /* Kontrol + DB kaydı + durum değişimi + telegram. Hata YUTULMAZ — çağıran try/catch yapsın */
@@ -191,33 +254,21 @@ function gb_process(array $site, array $cfg, string $dbFile): array {
     $oldSt = $row['status'] ?? null;
     $oldUserSt = $row['user_status'] ?? null;
     $streak = (int) ($row['blocked_streak'] ?? 0);
-    $alertMsg = null;
     $userSt = $r['ustatus'] ?? '-';
     $newStreak = $r['status'] === 'BLOCKED' ? $streak + 1 : 0;
-    $gbChanged = $oldSt !== null && $oldSt !== $r['status'];
-    $userChanged = $oldUserSt !== null && $oldUserSt !== $userSt;
+    $changed = ($oldSt !== null && $oldSt !== $r['status']) || ($oldUserSt !== null && $oldUserSt !== $userSt);
 
     if ($oldSt === null) {
         gb_db($dbFile)->prepare("INSERT INTO state(site,status,user_status,blocked_streak) VALUES(?,?,?,?)")
             ->execute([$url, $r['status'], $userSt, $newStreak]);
     } else {
-        if ($r['status'] === 'BLOCKED' && $newStreak >= 3 && $streak < 3) $alertMsg = "site:$name";
-        elseif ($r['status'] !== 'BLOCKED' && ($gbChanged || $userChanged)) $alertMsg = "site:$name";
-        elseif ($r['status'] === 'BLOCKED' && $userChanged) $alertMsg = "site:$name";
-
-        $since = ($gbChanged || $userChanged) ? ", since=datetime('now')" : '';
+        $since = $changed ? ", since=datetime('now')" : '';
         gb_db($dbFile)->prepare("UPDATE state SET status=?, user_status=?, blocked_streak=?$since WHERE site=?")
             ->execute([$r['status'], $userSt, $newStreak, $url]);
     }
-
-    if ($alertMsg !== null) {
-        gb_tg_send($cfg['telegram'] ?? [], gb_emoji($r['status']) . " " . $name .
-            "\nGooglebot: " . ($oldSt ?? '-') . " -> " . $r['status'] .
-            "\nKullanici: " . ($oldUserSt ?? '-') . " -> " . $userSt .
-            "\nHTTP " . $r['http'] . " | alt: " . ($r['alt'] ? implode(', ', $r['alt']) : '-') .
-            ($r['note'] !== '' ? "\nNot: " . $r['note'] : ''));
-    }
-    $r['alert'] = $alertMsg !== null;
     $r['name'] = $name;
+    $r['url'] = $url;
+    $r['previous_status'] = $oldSt;
+    $r['previous_user_status'] = $oldUserSt;
     return $r;
 }
