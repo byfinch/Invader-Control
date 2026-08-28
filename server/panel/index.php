@@ -83,6 +83,19 @@ try {
         $status = $status ?: '-';
         return '<span class="status ' . status_class($status) . '"><i></i>' . h(status_label($status)) . '</span>';
     }
+    /* İzlenen siteler tablo gövdesi — ilk yükleme ve AJAX güncellemesi aynı kaynaktan üretilir */
+    function render_site_rows(array $cfg, array $states, array $last, string $csrf): string {
+        ob_start();
+        $sites = $cfg['sites'] ?? [];
+        if (!$sites): ?>
+            <tr><td colspan="8" class="empty-state">Henüz izlenen site yok. Sağ üstten ilk hedefi ekleyin.</td></tr>
+        <?php endif;
+        foreach ($sites as $index => $site):
+            $url = $site['url']; $state = $states[$url] ?? null; $check = $last[$url] ?? null; $expected = gb_host_of($site['expect'] ?? ''); $observed = $check['alt'] ?? ''; ?>
+            <tr><td><div class="site-name"><?= h($site['name'] ?? gb_host_of($url)) ?></div><span class="site-url"><?= h($url) ?></span></td><td><span class="expect"><?= h($expected) ?></span></td><td><?= status_badge($state['status'] ?? '-') ?><span class="status-note">Googlebot HTML</span></td><td><?= status_badge($check['ustatus'] ?? '-') ?><span class="status-note">normal UA</span></td><td><div class="alt-cell"><span class="alt-expected">beklenen: <?= h($expected) ?></span><br><span class="alt-observed <?= ($observed && strpos(',' . $observed . ',', ',' . $expected . ',') === false) ? 'bad' : '' ?>">görülen: <?= h($observed ?: '-') ?></span></div></td><td class="time"><?= h(local_time($check['ts'] ?? null)) ?></td><td class="http"><?= h($check['http'] ?? '-') ?></td><td><div class="row-actions"><button type="button" class="btn btn-dark btn-edit" data-idx="<?= $index ?>" data-name="<?= h($site['name'] ?? '') ?>" data-url="<?= h($url) ?>" data-expect="<?= h($site['expect'] ?? '') ?>">Düzenle</button><form method="post" class="del-form"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="del_site"><input type="hidden" name="idx" value="<?= $index ?>"><button class="btn btn-danger">Sil</button></form></div></td></tr>
+        <?php endforeach;
+        return (string) ob_get_clean();
+    }
     function job_file(string $id): string { return '/opt/gbwatch/data/jobs/' . preg_replace('/[^a-f0-9]/', '', $id) . '.json'; }
     function save_job(array $job): void {
         $dir = '/opt/gbwatch/data/jobs';
@@ -92,7 +105,8 @@ try {
         rename($tmp, $file);
     }
     $CFG = load_cfg($CFG_FILE);
-    $message = ''; $error = '';
+    $message = (string) ($_SESSION['flash_m'] ?? ''); $error = (string) ($_SESSION['flash_e'] ?? '');
+    unset($_SESSION['flash_m'], $_SESSION['flash_e']);
 
     if (isset($_GET['job'])) {
         header('Content-Type: application/json; charset=utf-8');
@@ -226,6 +240,13 @@ try {
         } catch (Throwable $e) { $error = 'Islem hatasi: ' . $e->getMessage(); }
     }
 
+    /* JS'siz istem: post → yönlendir (PRG) ki yenileme formu tekrar göndermesin */
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($_POST['ajax'])) {
+        $_SESSION['flash_m'] = $message; $_SESSION['flash_e'] = $error;
+        header('Location: ' . $_SERVER['PHP_SELF']);
+        exit;
+    }
+
     $CFG = load_cfg($CFG_FILE);
     $historyPerPage = 10;
     $historyPage = max(1, (int) ($_GET['page'] ?? 1));
@@ -253,6 +274,22 @@ try {
     }
     $latestRun = gb_db($DB_FILE)->query("SELECT ts FROM checks ORDER BY id DESC LIMIT 1")->fetchColumn();
     $lastRun = $latestRun ?: null;
+
+    /* AJAX form gönderimi: sayfa yenilemeden tablo + metrik güncellemesi */
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'ok' => $error === '',
+            'message' => $message,
+            'error' => $error,
+            'tbody' => render_site_rows($CFG, $states, $last, $csrf),
+            'siteCount' => $siteCount,
+            'okCount' => $okCount,
+            'attentionCount' => $attentionCount,
+            'lastRun' => local_time($lastRun),
+        ]);
+        exit;
+    }
 }
 catch (Throwable $fatal) {
     http_response_code(500);
@@ -273,7 +310,7 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
 .summary{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;margin-bottom:30px;border:1px solid transparent;background:linear-gradient(var(--paper),var(--paper)) padding-box,linear-gradient(135deg,rgba(57,255,106,.45),#12301c 60%) border-box;clip-path:var(--chamfer-lg)}.metric{min-height:104px;padding:18px 22px;border-right:1px solid var(--line);display:flex;align-items:center;gap:16px}.metric:last-child{border-right:0}.metric-label{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.8px}.metric-value{display:block;margin-top:0;font-size:28px;font-weight:500;font-family:var(--head-font)}.metric-value.good{color:var(--lime);text-shadow:0 0 12px rgba(57,255,106,.4)}.metric-value.bad{color:var(--red);text-shadow:0 0 12px rgba(255,77,94,.4)}.metric-note{display:block;color:var(--muted);font-size:11px;margin-top:2px}.metric-side{display:flex;flex-direction:column;gap:3px;min-width:0}
 .notice{padding:13px 16px;margin:-10px 0 22px;white-space:pre-wrap;border:1px solid transparent;background:linear-gradient(#160707,#160707) padding-box,linear-gradient(135deg,rgba(255,77,94,.45),#5c1f27) border-box;color:#ffb9c1;clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}.notice.ok{background:linear-gradient(#071608,#071608) padding-box,linear-gradient(135deg,rgba(57,255,106,.4),#1d4d28) border-box;color:#a9f5c0}
 .run-progress{margin:-10px 0 22px;padding:18px 20px;border:1px solid transparent;background:linear-gradient(var(--paper),var(--paper)) padding-box,linear-gradient(135deg,rgba(57,255,106,.45),#12301c 60%) border-box;clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px)}.run-progress.error{background:linear-gradient(#140505,#140505) padding-box,linear-gradient(135deg,rgba(255,77,94,.5),#5c1f27) border-box}.rp-head{display:flex;justify-content:space-between;gap:16px;align-items:baseline}.rp-head strong{font:600 13px var(--head-font);letter-spacing:1.6px;text-transform:uppercase;color:var(--ink)}.rp-count{color:var(--lime);font:12px var(--head-font)}.rp-counters{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}.rp-counter{background:#030a05;border:1px solid var(--line);padding:12px 14px;clip-path:var(--chamfer-sm)}.rp-counter small{display:block;color:var(--muted);font:9px var(--head-font);letter-spacing:1.2px;text-transform:uppercase}.rp-counter b{display:block;margin-top:6px;font:500 24px var(--head-font);color:var(--ink)}.rp-counter.ok b{color:var(--lime);text-shadow:0 0 12px rgba(57,255,106,.5)}.rp-counter.down b{color:var(--red);text-shadow:0 0 12px rgba(255,77,94,.5)}.rp-counter.warn b{color:var(--amber)}.rp-seg{display:flex;height:8px;margin-top:14px;gap:3px}.rp-seg i{display:block;height:100%;clip-path:polygon(3px 0,100% 0,100% calc(100% - 3px),calc(100% - 3px) 100%,0 100%,0 3px);transition:width .3s}.seg-ok{background:var(--lime)}.seg-down{background:var(--red)}.seg-warn{background:var(--amber)}.seg-left{background:#0a1a0e;border:1px solid var(--line)}.rp-foot{display:flex;justify-content:space-between;gap:16px;margin-top:12px;color:var(--ink);font:12px var(--head-font)}.rp-eta{color:var(--muted);font-size:11px}@keyframes rp-blink{0%,100%{opacity:1}50%{opacity:.25}}.pulse{animation:rp-blink 1.1s infinite}
-.section{margin-top:30px}.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:13px}.section-title{display:flex;align-items:baseline;gap:11px}.section-title h2{font-size:17px;margin:0;font-weight:600;font-family:var(--head-font);letter-spacing:-.3px}.section-sub{color:var(--muted);font-size:12px;margin:4px 0 0}.section-head details{position:relative}.section-head summary{list-style:none;cursor:pointer}.section-head summary::-webkit-details-marker{display:none}.add-pop{position:absolute;right:0;top:42px;width:380px;padding:18px;z-index:5;border:1px solid transparent;background:linear-gradient(var(--paper2),var(--paper2)) padding-box,linear-gradient(135deg,rgba(57,255,106,.45),#12301c 60%) border-box;clip-path:var(--chamfer-lg)}.add-pop h3{font-size:13px;margin:0 0 14px}.field{display:block;margin-bottom:10px}.field span{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}.field input{width:100%;padding:9px 10px;border:1px solid transparent;background:linear-gradient(#020602,#020602) padding-box,linear-gradient(135deg,#1c4226,#0e2415) border-box;clip-path:var(--chamfer-sm);color:var(--ink);outline:none}.field input:focus{box-shadow:0 0 14px rgba(57,255,106,.15)}.field .hint{display:block;color:var(--muted);font-size:10px;margin-top:4px;opacity:.85}.add-actions{display:flex;justify-content:flex-end;margin-top:14px;gap:8px}.row-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}.row-actions form{margin:0}.edit-dialog{border:1px solid transparent;background:linear-gradient(var(--paper2),var(--paper2)) padding-box,linear-gradient(135deg,rgba(57,255,106,.45),#12301c 60%) border-box;clip-path:var(--chamfer-lg);padding:20px;width:min(420px,calc(100vw - 32px));color:var(--ink)}.edit-dialog::backdrop{background:rgba(0,0,0,.72)}.edit-dialog h3{font-size:13px;margin:0 0 14px;font-family:var(--head-font);text-transform:uppercase;letter-spacing:1px}
+.section{margin-top:30px}.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:13px}.section-title{display:flex;align-items:baseline;gap:11px}.section-title h2{font-size:17px;margin:0;font-weight:600;font-family:var(--head-font);letter-spacing:-.3px}.section-sub{color:var(--muted);font-size:12px;margin:4px 0 0}.section-head details{position:relative}.section-head summary{list-style:none;cursor:pointer}.section-head summary::-webkit-details-marker{display:none}.add-pop{position:absolute;right:0;top:42px;width:380px;padding:18px;z-index:5;border:1px solid transparent;background:linear-gradient(var(--paper2),var(--paper2)) padding-box,linear-gradient(135deg,rgba(57,255,106,.45),#12301c 60%) border-box;clip-path:var(--chamfer-lg)}.add-pop h3{font-size:13px;margin:0 0 14px}.field{display:block;margin-bottom:10px}.field span{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}.field input{width:100%;padding:9px 10px;border:1px solid transparent;background:linear-gradient(#020602,#020602) padding-box,linear-gradient(135deg,#1c4226,#0e2415) border-box;clip-path:var(--chamfer-sm);color:var(--ink);outline:none}.field input:focus{box-shadow:0 0 14px rgba(57,255,106,.15)}.field .hint{display:block;color:var(--muted);font-size:10px;margin-top:4px;opacity:.85}.add-actions{display:flex;justify-content:flex-end;margin-top:14px;gap:8px}.row-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}.row-actions form{margin:0}.edit-dialog{border:1px solid transparent;background:linear-gradient(var(--paper2),var(--paper2)) padding-box,linear-gradient(135deg,rgba(57,255,106,.45),#12301c 60%) border-box;clip-path:var(--chamfer-lg);padding:20px;width:min(420px,calc(100vw - 32px));color:var(--ink)}.edit-dialog::backdrop{background:rgba(0,0,0,.72)}.edit-dialog h3{font-size:13px;margin:0 0 14px;font-family:var(--head-font);text-transform:uppercase;letter-spacing:1px}.form-error{color:var(--red);font-size:12px;margin:0 0 10px;font-family:var(--head-font)}
 .table-shell{border:1px solid transparent;background:linear-gradient(var(--paper),var(--paper)) padding-box,linear-gradient(135deg,rgba(57,255,106,.45),#12301c 60%) border-box;clip-path:var(--chamfer-lg);overflow-x:auto}.site-table{width:100%;border-collapse:collapse;min-width:850px}.site-table th{padding:12px 15px;text-align:left;background:var(--paper2);color:#4f7a5c;border-bottom:1px solid var(--line);font-size:10px;letter-spacing:1px;text-transform:uppercase;font-weight:700}.site-table td{padding:16px 15px;border-bottom:1px solid #0e2415;vertical-align:middle}.site-table tr:last-child td{border-bottom:0}.site-table tbody tr:hover{background:#081408}.site-name{font-weight:680}.site-url{display:block;color:var(--muted);font-size:11px;margin-top:3px;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.expect{font-family:var(--head-font);font-size:12px;color:#7fae8d}.status{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:760;letter-spacing:.45px;border:1px solid currentColor;padding:2px 7px;clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px)}.status i{width:8px;height:8px;border-radius:50%;background:#98a5b2;box-shadow:0 0 8px currentColor}.status.ok{color:var(--lime)}.status.ok i{background:var(--lime)}.status.info{color:#7ab8ff}.status.info i{background:#7ab8ff}.status.down,.status.error{color:var(--red)}.status.down i,.status.error i{background:var(--red)}.status.warn{color:var(--amber)}.status.warn i{background:var(--amber)}.status.idle{color:var(--muted)}.status-note{display:block;margin-top:4px;color:var(--muted);font-size:11px}.alt-cell{font-family:var(--head-font);font-size:11px;line-height:1.7}.alt-expected{color:var(--muted)}.alt-observed{color:#a9d8b6}.alt-observed.bad{color:var(--red)}.time{font-family:var(--head-font);color:var(--muted);font-size:11px;white-space:nowrap}.http{font-family:var(--head-font);font-size:12px;color:var(--muted)}.empty-state{text-align:center;padding:36px;color:var(--muted)}
 .history{margin-top:30px}.history summary{cursor:pointer;color:var(--muted);font-weight:650;font-size:12px;list-style:none}.history summary::-webkit-details-marker{display:none}.history summary:before{content:'+';display:inline-block;margin-right:8px;color:var(--lime);font-size:16px;vertical-align:-1px}.history[open] summary:before{content:'−'}.history-table{margin-top:13px}.history-table .site-url{max-width:220px}.history-table .note{color:var(--muted);font-size:11px;max-width:280px}.page-label{font-size:11px;color:var(--muted);font-family:var(--head-font)}.pagination{display:flex;align-items:center;justify-content:flex-end;gap:5px;margin-top:14px}.pagination a,.pagination span{min-width:30px;height:30px;padding:6px 9px;text-align:center;border:1px solid var(--line);color:var(--muted);text-decoration:none;font-size:12px;background:var(--paper);clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px)}.pagination a:hover{border-color:var(--lime);color:var(--lime)}.pagination .current{background:var(--lime);border-color:var(--lime);color:#021108;font-weight:700}.pagination .ellipsis{border-color:transparent;background:transparent;min-width:16px;clip-path:none}.footer-note{text-align:left;border-top:1px solid var(--line);padding-top:14px;color:var(--muted);font-size:11px;margin-top:22px}
 @media(max-width:850px){.summary{grid-template-columns:1fr 1fr}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}.intro{align-items:flex-start;flex-direction:column}.intro form{width:100%}.intro form .btn{width:100%}.rp-counters{grid-template-columns:1fr 1fr}}
@@ -289,8 +326,7 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
   <section class="intro"><div><span class="eyebrow">01 / Genel bakış</span><h1>Kontrol merkezi</h1><p>Googlebot görünümü ile normal kullanıcı görünümünü aynı ölçümde izleyin.</p></div><form method="post" id="run-form"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="start_run"><button class="btn btn-primary" id="run-button" type="submit">Tüm siteleri kontrol et</button></form></section>
   <div class="run-progress" id="run-progress" hidden><div class="rp-head"><strong><span class="pulse">●</span> <span id="run-progress-title">Kontrol hazırlanıyor</span></strong><span class="rp-count" id="run-progress-count">0 / 0</span></div><div class="rp-counters"><div class="rp-counter"><small>Tamamlanan</small><b id="run-count-done">0</b></div><div class="rp-counter ok"><small>OK</small><b id="run-count-ok">0</b></div><div class="rp-counter down"><small>Düşük</small><b id="run-count-down">0</b></div><div class="rp-counter warn"><small>Engelli</small><b id="run-count-warn">0</b></div></div><div class="rp-seg"><i class="seg-ok" id="run-seg-ok" style="width:0%"></i><i class="seg-down" id="run-seg-down" style="width:0%"></i><i class="seg-warn" id="run-seg-warn" style="width:0%"></i><i class="seg-left" id="run-seg-left" style="width:100%"></i></div><div class="rp-foot"><span id="run-progress-current">Sunucu işi başlatıyor...</span><span class="rp-eta" id="run-progress-eta"></span></div></div>
 
-  <?php if ($message): ?><div class="notice ok"><?= h($message) ?></div><?php endif; ?>
-  <?php if ($error): ?><div class="notice"><?= h($error) ?></div><?php endif; ?>
+  <div id="flash-area"><?php if ($message): ?><div class="notice ok"><?= h($message) ?></div><?php endif; ?><?php if ($error): ?><div class="notice"><?= h($error) ?></div><?php endif; ?></div>
   <?php if ($duplicateUrls): ?><div class="notice">Aynı URL birden fazla kez kayıtlı. Tekrarlanan kaydı silmeden sonuçlar birbirini ezebilir.</div><?php endif; ?>
 
   <section class="summary">
@@ -301,16 +337,12 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
   </section>
 
   <section class="section">
-    <div class="section-head"><div><div class="section-title"><span class="section-no">02</span><h2>İzlenen siteler</h2></div><p class="section-sub">Googlebot kodundaki alternate domain ile beklenen hedefi karşılaştırır.</p></div><details><summary class="btn btn-dark">+ Site ekle</summary><div class="add-pop"><h3>Yeni izleme hedefi</h3><form method="post"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="add_site"><label class="field"><span>İzlenecek URL</span><input name="s_url" placeholder="site.com" required><small class="hint">http://, https://, www. fark etmez — olduğu gibi yapıştırın.</small></label><label class="field"><span>Beklenen alternate domain</span><input name="s_expect" placeholder="milanbahis.cam" required><small class="hint">Sadece domain yeterli; link yapıştırırsanız domaini ayıklarız.</small></label><label class="field"><span>Panel adı <small>(opsiyonel)</small></span><input name="s_name" placeholder="site adı"></label><div class="add-actions"><button class="btn btn-primary">İzlemeye al</button></div></form></div></details></div>
-    <div class="table-shell monitor-shell"><table class="site-table monitor-table"><thead><tr><th>Site</th><th>Beklenen alternate</th><th>Googlebot</th><th>Kullanıcı</th><th>Görülen alternate</th><th>Son kontrol</th><th>HTTP</th><th></th></tr></thead><tbody>
-    <?php if (!$siteCount): ?><tr><td colspan="8" class="empty-state">Henüz izlenen site yok. Sağ üstten ilk hedefi ekleyin.</td></tr><?php endif; ?>
-    <?php foreach (($CFG['sites'] ?? []) as $index => $site): $url = $site['url']; $state = $states[$url] ?? null; $check = $last[$url] ?? null; $expected = gb_host_of($site['expect'] ?? ''); $observed = $check['alt'] ?? ''; ?>
-      <tr><td><div class="site-name"><?= h($site['name'] ?? gb_host_of($url)) ?></div><span class="site-url"><?= h($url) ?></span></td><td><span class="expect"><?= h($expected) ?></span></td><td><?= status_badge($state['status'] ?? '-') ?><span class="status-note">Googlebot HTML</span></td><td><?= status_badge($check['ustatus'] ?? '-') ?><span class="status-note">normal UA</span></td><td><div class="alt-cell"><span class="alt-expected">beklenen: <?= h($expected) ?></span><br><span class="alt-observed <?= ($observed && strpos(',' . $observed . ',', ',' . $expected . ',') === false) ? 'bad' : '' ?>">görülen: <?= h($observed ?: '-') ?></span></div></td><td class="time"><?= h(local_time($check['ts'] ?? null)) ?></td><td class="http"><?= h($check['http'] ?? '-') ?></td><td><div class="row-actions"><button type="button" class="btn btn-dark btn-edit" data-idx="<?= $index ?>" data-name="<?= h($site['name'] ?? '') ?>" data-url="<?= h($url) ?>" data-expect="<?= h($site['expect'] ?? '') ?>">Düzenle</button><form method="post" onsubmit="return confirm('Bu izlemeyi kaldıralım mı?')"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="del_site"><input type="hidden" name="idx" value="<?= $index ?>"><button class="btn btn-danger">Sil</button></form></div></td></tr>
-    <?php endforeach; ?></tbody></table></div>
+    <div class="section-head"><div><div class="section-title"><span class="section-no">02</span><h2>İzlenen siteler</h2></div><p class="section-sub">Googlebot kodundaki alternate domain ile beklenen hedefi karşılaştırır.</p></div><details id="add-details"><summary class="btn btn-dark">+ Site ekle</summary><div class="add-pop"><h3>Yeni izleme hedefi</h3><form method="post" id="add-site-form"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="add_site"><label class="field"><span>İzlenecek URL</span><input name="s_url" placeholder="site.com" required><small class="hint">http://, https://, www. fark etmez — olduğu gibi yapıştırın.</small></label><label class="field"><span>Beklenen alternate domain</span><input name="s_expect" placeholder="milanbahis.cam" required><small class="hint">Sadece domain yeterli; link yapıştırırsanız domaini ayıklarız.</small></label><label class="field"><span>Panel adı <small>(opsiyonel)</small></span><input name="s_name" placeholder="site adı"></label><div class="add-actions"><button class="btn btn-primary">İzlemeye al</button></div></form></div></details></div>
+    <div class="table-shell monitor-shell"><table class="site-table monitor-table"><thead><tr><th>Site</th><th>Beklenen alternate</th><th>Googlebot</th><th>Kullanıcı</th><th>Görülen alternate</th><th>Son kontrol</th><th>HTTP</th><th></th></tr></thead><tbody id="site-rows"><?= render_site_rows($CFG, $states, $last, $csrf) ?></tbody></table></div>
   </section>
 
   <section class="history" id="history"><div class="section-head"><div><div class="section-title"><span class="section-no">03</span><h2>Kontrol geçmişi</h2></div><p class="section-sub">Her sayfada <?= $historyPerPage ?> kayıt gösteriliyor · toplam <?= $historyTotal ?> kayıt</p></div><span class="page-label" id="history-label">Sayfa <?= $historyPage ?> / <?= $historyPages ?></span></div><div class="table-shell history-table"><table class="site-table"><thead><tr><th>Zaman</th><th>Site</th><th>Googlebot</th><th>Kullanıcı</th><th>HTTP</th><th>Alternate</th><th>Not</th></tr></thead><tbody id="history-rows"><?php if (!$history): ?><tr><td colspan="7" class="empty-state">Henüz kontrol kaydı yok.</td></tr><?php endif; ?><?php foreach ($history as $row): ?><tr><td class="time"><?= h(local_time($row['ts'])) ?></td><td><span class="site-url"><?= h($row['site']) ?></span></td><td><?= status_badge($row['status']) ?></td><td><?= status_badge($row['ustatus'] ?? '-') ?></td><td class="http"><?= h($row['http']) ?></td><td class="expect"><?= h($row['alt'] ?: '-') ?></td><td class="note"><?= h($row['note'] ?: '-') ?></td></tr><?php endforeach; ?></tbody></table></div><nav class="pagination" aria-label="Kontrol geçmişi sayfaları"><?php if ($historyPage > 1): ?><a href="?page=<?= $historyPage - 1 ?>#history">Önceki</a><?php endif; ?><?php for ($p = 1; $p <= $historyPages; $p++): if ($p === $historyPage): ?><span class="current"><?= $p ?></span><?php elseif ($p <= 3 || $p > $historyPages - 2 || abs($p - $historyPage) <= 1): ?><a href="?page=<?= $p ?>#history"><?= $p ?></a><?php elseif ($p === 4 || $p === $historyPages - 2): ?><span class="ellipsis">…</span><?php endif; endfor; ?><?php if ($historyPage < $historyPages): ?><a href="?page=<?= $historyPage + 1 ?>#history">Sonraki</a><?php endif; ?></nav></section>
-  <dialog class="edit-dialog" id="edit-dialog"><form method="post"><h3>İzlemeyi düzenle</h3><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="edit_site"><input type="hidden" name="idx" id="edit-idx"><label class="field"><span>İzlenecek URL</span><input name="s_url" id="edit-url" placeholder="site.com" required><small class="hint">http://, https://, www. fark etmez — olduğu gibi yapıştırın.</small></label><label class="field"><span>Beklenen alternate domain</span><input name="s_expect" id="edit-expect" placeholder="milanbahis.cam" required><small class="hint">Sadece domain yeterli; link yapıştırırsanız domaini ayıklarız.</small></label><label class="field"><span>Panel adı <small>(opsiyonel)</small></span><input name="s_name" id="edit-name" placeholder="site adı"></label><div class="add-actions"><button type="button" class="btn btn-quiet" id="edit-cancel">Vazgeç</button><button class="btn btn-primary">Kaydet</button></div></form></dialog>
+  <dialog class="edit-dialog" id="edit-dialog"><form method="post" id="edit-site-form"><h3>İzlemeyi düzenle</h3><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="edit_site"><input type="hidden" name="idx" id="edit-idx"><label class="field"><span>İzlenecek URL</span><input name="s_url" id="edit-url" placeholder="site.com" required><small class="hint">http://, https://, www. fark etmez — olduğu gibi yapıştırın.</small></label><label class="field"><span>Beklenen alternate domain</span><input name="s_expect" id="edit-expect" placeholder="milanbahis.cam" required><small class="hint">Sadece domain yeterli; link yapıştırırsanız domaini ayıklarız.</small></label><label class="field"><span>Panel adı <small>(opsiyonel)</small></span><input name="s_name" id="edit-name" placeholder="site adı"></label><div class="add-actions"><button type="button" class="btn btn-quiet" id="edit-cancel">Vazgeç</button><button class="btn btn-primary">Kaydet</button></div></form></dialog>
   <div class="footer-note">Son ölçüm zamanları Europe/Istanbul · HTTP kontrolü Googlebot User-Agent ile yapılır</div>
 </main>
 <script>
@@ -349,18 +381,72 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
 <script>
 (function(){
   const dialog=document.getElementById('edit-dialog');
-  if(!dialog) return;
-  document.querySelectorAll('.btn-edit').forEach(function(b){
-    b.addEventListener('click',function(){
+  const siteRows=document.getElementById('site-rows');
+  const flashArea=document.getElementById('flash-area');
+  const metricValues=document.querySelectorAll('.summary .metric-value');
+  function showFlash(text, ok){
+    if(!flashArea) return;
+    flashArea.innerHTML=text ? '<div class="notice'+(ok?' ok':'')+'"></div>' : '';
+    if(text) flashArea.firstChild.textContent=text;
+  }
+  function formError(form, text){
+    let ef=form.querySelector('.form-error');
+    if(!ef){ef=document.createElement('div');ef.className='form-error';form.insertBefore(ef,form.firstChild);}
+    ef.textContent=text;
+  }
+  async function sendForm(form){
+    const fd=new FormData(form); fd.append('ajax','1');
+    let d=null;
+    try{const r=await fetch(location.pathname,{method:'POST',body:fd,headers:{'X-Requested-With':'XMLHttpRequest'}}); d=await r.json();}
+    catch(e){ d={ok:false,error:'İstek gönderilemedi. Bağlantıyı kontrol edin.'}; }
+    if(d.ok){
+      showFlash(d.message,true);
+      if(siteRows && d.tbody!==undefined) siteRows.innerHTML=d.tbody;
+      if(metricValues.length>=4){
+        metricValues[0].textContent=d.siteCount;
+        metricValues[1].textContent=d.okCount;
+        metricValues[2].textContent=d.attentionCount;
+        metricValues[2].classList.toggle('bad', Number(d.attentionCount)>0);
+        metricValues[3].textContent=d.lastRun;
+      }
+    } else if(form.classList.contains('del-form')) showFlash(d.error,false);
+    else formError(form, d.error||'İşlem başarısız.');
+    return d;
+  }
+  ['add-site-form','edit-site-form'].forEach(function(id){
+    const f=document.getElementById(id);
+    if(!f) return;
+    f.addEventListener('submit',async function(e){
+      e.preventDefault();
+      const d=await sendForm(f);
+      if(d && d.ok){
+        if(id==='edit-site-form' && dialog) dialog.close();
+        if(id==='add-site-form'){f.reset();const det=document.getElementById('add-details');if(det) det.removeAttribute('open');}
+      }
+    });
+  });
+  if(siteRows){
+    siteRows.addEventListener('submit',function(e){
+      const f=e.target;
+      if(f && f.classList && f.classList.contains('del-form')){
+        e.preventDefault();
+        if(confirm('Bu izlemeyi kaldıralım mı?')) sendForm(f);
+      }
+    });
+    siteRows.addEventListener('click',function(e){
+      const b=e.target.closest('.btn-edit');
+      if(!b || !dialog) return;
       document.getElementById('edit-idx').value=b.dataset.idx||'';
       document.getElementById('edit-url').value=b.dataset.url||'';
       document.getElementById('edit-expect').value=b.dataset.expect||'';
       document.getElementById('edit-name').value=b.dataset.name||'';
       dialog.showModal();
     });
-  });
-  document.getElementById('edit-cancel').addEventListener('click',function(){dialog.close();});
-  dialog.addEventListener('click',function(e){if(e.target===dialog) dialog.close();});
+  }
+  if(dialog){
+    document.getElementById('edit-cancel').addEventListener('click',function(){dialog.close();});
+    dialog.addEventListener('click',function(e){if(e.target===dialog) dialog.close();});
+  }
 })();
 </script>
 <script>
