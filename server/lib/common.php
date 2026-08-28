@@ -178,7 +178,7 @@ function gb_capture(string $url, string $id): array {
         CURLOPT_POSTFIELDS => json_encode(['url' => $url, 'id' => $id]),
         CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => 75,
+        CURLOPT_TIMEOUT => 130,
     ]);
     $raw = curl_exec($ch);
     $err = curl_error($ch);

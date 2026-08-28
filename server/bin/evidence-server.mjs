@@ -25,6 +25,32 @@ async function readBody(req) {
   return JSON.parse(body);
 }
 
+async function captureView(browser, url, key, userAgent, dir) {
+  const context = await browser.newContext({
+    userAgent,
+    viewport: {width: 1440, height: 900},
+    deviceScaleFactor: 1,
+  });
+  const page = await context.newPage();
+  try {
+    let response = null;
+    try {
+      response = await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 25000});
+    } catch (navError) {
+      /* bazı siteler domcontentloaded'i hiç bitirmez — commit ile ne yüklendiyse onu yakala */
+      response = await page.goto(url, {waitUntil: 'commit', timeout: 15000}).catch(() => null);
+    }
+    await page.waitForTimeout(1500);
+    const file = path.join(dir, `${key}.png`);
+    await page.screenshot({path: file, fullPage: false});
+    return {ok: true, data: {path: file, http: response?.status() ?? 0, title: await page.title().catch(() => '')}};
+  } catch (viewError) {
+    return {ok: false, error: viewError.message};
+  } finally {
+    await context.close();
+  }
+}
+
 async function capture(url, id) {
   if (!/^https?:\/\//i.test(url)) throw new Error('invalid URL');
   const safeId = String(id || 'site').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
@@ -39,31 +65,13 @@ async function capture(url, id) {
   const result = {};
   const errors = {};
   try {
-    for (const [key, userAgent] of [['googlebot', GOOGLEBOT_UA], ['user', USER_UA]]) {
-      const context = await browser.newContext({
-        userAgent,
-        viewport: {width: 1440, height: 900},
-        deviceScaleFactor: 1,
-      });
-      const page = await context.newPage();
-      try {
-        let response = null;
-        try {
-          response = await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 30000});
-        } catch (navError) {
-          /* bazı siteler domcontentloaded'i hiç bitirmez — commit ile ne yüklendiyse onu yakala */
-          response = await page.goto(url, {waitUntil: 'commit', timeout: 15000}).catch(() => null);
-        }
-        await page.waitForTimeout(1500);
-        const file = path.join(dir, `${key}.png`);
-        await page.screenshot({path: file, fullPage: false});
-        result[key] = {path: file, http: response?.status() ?? 0, title: await page.title().catch(() => '')};
-      } catch (viewError) {
-        errors[key] = viewError.message;
-      } finally {
-        await context.close();
-      }
-    }
+    /* iki görünüm paralel — tek yavaş site toplam süreyi ikiye katlamasın */
+    const [g, u] = await Promise.all([
+      captureView(browser, url, 'googlebot', GOOGLEBOT_UA, dir),
+      captureView(browser, url, 'user', USER_UA, dir),
+    ]);
+    if (g.ok) result.googlebot = g.data; else errors.googlebot = g.error;
+    if (u.ok) result.user = u.data; else errors.user = u.error;
   } finally {
     await browser.close();
   }
