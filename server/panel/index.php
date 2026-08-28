@@ -339,6 +339,7 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
   <section class="section">
     <div class="section-head"><div><div class="section-title"><span class="section-no">02</span><h2>İzlenen siteler</h2></div><p class="section-sub">Googlebot kodundaki alternate domain ile beklenen hedefi karşılaştırır.</p></div><details id="add-details"><summary class="btn btn-dark">+ Site ekle</summary><div class="add-pop"><h3>Yeni izleme hedefi</h3><form method="post" id="add-site-form"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="add_site"><label class="field"><span>İzlenecek URL</span><input name="s_url" placeholder="site.com" required><small class="hint">http://, https://, www. fark etmez — olduğu gibi yapıştırın.</small></label><label class="field"><span>Beklenen alternate domain</span><input name="s_expect" placeholder="milanbahis.cam" required><small class="hint">Sadece domain yeterli; link yapıştırırsanız domaini ayıklarız.</small></label><label class="field"><span>Panel adı <small>(opsiyonel)</small></span><input name="s_name" placeholder="site adı"></label><div class="add-actions"><button class="btn btn-primary">İzlemeye al</button></div></form></div></details></div>
     <div class="table-shell monitor-shell"><table class="site-table monitor-table"><thead><tr><th>Site</th><th>Beklenen alternate</th><th>Googlebot</th><th>Kullanıcı</th><th>Görülen alternate</th><th>Son kontrol</th><th>HTTP</th><th></th></tr></thead><tbody id="site-rows"><?= render_site_rows($CFG, $states, $last, $csrf) ?></tbody></table></div>
+    <nav class="pagination site-pagination" id="site-pagination" aria-label="İzlenen siteler sayfaları"></nav>
   </section>
 
   <section class="history" id="history"><div class="section-head"><div><div class="section-title"><span class="section-no">03</span><h2>Kontrol geçmişi</h2></div><p class="section-sub">Her sayfada <?= $historyPerPage ?> kayıt gösteriliyor · toplam <?= $historyTotal ?> kayıt</p></div><span class="page-label" id="history-label">Sayfa <?= $historyPage ?> / <?= $historyPages ?></span></div><div class="table-shell history-table"><table class="site-table"><thead><tr><th>Zaman</th><th>Site</th><th>Googlebot</th><th>Kullanıcı</th><th>HTTP</th><th>Alternate</th><th>Not</th></tr></thead><tbody id="history-rows"><?php if (!$history): ?><tr><td colspan="7" class="empty-state">Henüz kontrol kaydı yok.</td></tr><?php endif; ?><?php foreach ($history as $row): ?><tr><td class="time"><?= h(local_time($row['ts'])) ?></td><td><span class="site-url"><?= h($row['site']) ?></span></td><td><?= status_badge($row['status']) ?></td><td><?= status_badge($row['ustatus'] ?? '-') ?></td><td class="http"><?= h($row['http']) ?></td><td class="expect"><?= h($row['alt'] ?: '-') ?></td><td class="note"><?= h($row['note'] ?: '-') ?></td></tr><?php endforeach; ?></tbody></table></div><nav class="pagination" aria-label="Kontrol geçmişi sayfaları"><?php if ($historyPage > 1): ?><a href="?page=<?= $historyPage - 1 ?>#history">Önceki</a><?php endif; ?><?php for ($p = 1; $p <= $historyPages; $p++): if ($p === $historyPage): ?><span class="current"><?= $p ?></span><?php elseif ($p <= 3 || $p > $historyPages - 2 || abs($p - $historyPage) <= 1): ?><a href="?page=<?= $p ?>#history"><?= $p ?></a><?php elseif ($p === 4 || $p === $historyPages - 2): ?><span class="ellipsis">…</span><?php endif; endfor; ?><?php if ($historyPage < $historyPages): ?><a href="?page=<?= $historyPage + 1 ?>#history">Sonraki</a><?php endif; ?></nav></section>
@@ -382,8 +383,13 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
 (function(){
   const dialog=document.getElementById('edit-dialog');
   const siteRows=document.getElementById('site-rows');
+  const siteNav=document.getElementById('site-pagination');
   const flashArea=document.getElementById('flash-area');
   const metricValues=document.querySelectorAll('.summary .metric-value');
+  const SITE_PER_PAGE=10;
+  let siteAll=[];
+  let sitePage=parseInt((location.search.match(/[?&]spage=(\d+)/)||[])[1]||'1',10)||1;
+
   function showFlash(text, ok){
     if(!flashArea) return;
     flashArea.innerHTML=text ? '<div class="notice'+(ok?' ok':'')+'"></div>' : '';
@@ -394,14 +400,44 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
     if(!ef){ef=document.createElement('div');ef.className='form-error';form.insertBefore(ef,form.firstChild);}
     ef.textContent=text;
   }
-  async function sendForm(form){
+  function siteNavHtml(page,pages){
+    let h='';
+    if(page>1) h+='<a href="#" data-sp="'+(page-1)+'">Önceki</a>';
+    for(let p=1;p<=pages;p++){
+      if(p===page) h+='<span class="current">'+p+'</span>';
+      else if(p<=3||p>pages-2||Math.abs(p-page)<=1) h+='<a href="#" data-sp="'+p+'">'+p+'</a>';
+      else if(p===4||p===pages-2) h+='<span class="ellipsis">…</span>';
+    }
+    if(page<pages) h+='<a href="#" data-sp="'+(page+1)+'">Sonraki</a>';
+    return h;
+  }
+  function renderSites(){
+    const empty=siteAll.length===1 && siteAll[0].querySelector('.empty-state');
+    const pages=empty?1:Math.max(1,Math.ceil(siteAll.length/SITE_PER_PAGE));
+    sitePage=Math.min(Math.max(1,sitePage),pages);
+    siteRows.innerHTML='';
+    (empty?siteAll:siteAll.slice((sitePage-1)*SITE_PER_PAGE, sitePage*SITE_PER_PAGE)).forEach(function(r){siteRows.appendChild(r);});
+    if(siteNav) siteNav.innerHTML=pages>1?siteNavHtml(sitePage,pages):'';
+    try{
+      const u=new URL(location.href);
+      if(sitePage>1) u.searchParams.set('spage',sitePage); else u.searchParams.delete('spage');
+      history.replaceState(null,'',u);
+    }catch(e){}
+  }
+  function setSiteRows(tbodyHtml){
+    const tpl=document.createElement('template');
+    tpl.innerHTML='<table><tbody>'+tbodyHtml+'</tbody></table>';
+    siteAll=Array.prototype.slice.call(tpl.content.querySelector('tbody').children);
+    renderSites();
+  }
+  async function sendForm(form, jumpLast){
     const fd=new FormData(form); fd.append('ajax','1');
     let d=null;
     try{const r=await fetch(location.pathname,{method:'POST',body:fd,headers:{'X-Requested-With':'XMLHttpRequest'}}); d=await r.json();}
     catch(e){ d={ok:false,error:'İstek gönderilemedi. Bağlantıyı kontrol edin.'}; }
     if(d.ok){
       showFlash(d.message,true);
-      if(siteRows && d.tbody!==undefined) siteRows.innerHTML=d.tbody;
+      if(siteRows && d.tbody!==undefined){ if(jumpLast) sitePage=1e9; setSiteRows(d.tbody); }
       if(metricValues.length>=4){
         metricValues[0].textContent=d.siteCount;
         metricValues[1].textContent=d.okCount;
@@ -418,19 +454,28 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
     if(!f) return;
     f.addEventListener('submit',async function(e){
       e.preventDefault();
-      const d=await sendForm(f);
+      const d=await sendForm(f, id==='add-site-form');
       if(d && d.ok){
         if(id==='edit-site-form' && dialog) dialog.close();
         if(id==='add-site-form'){f.reset();const det=document.getElementById('add-details');if(det) det.removeAttribute('open');}
       }
     });
   });
+  if(siteNav){
+    siteNav.addEventListener('click',function(e){
+      const a=e.target.closest('a[data-sp]');
+      if(!a) return;
+      e.preventDefault();
+      sitePage=parseInt(a.getAttribute('data-sp'),10)||1;
+      renderSites();
+    });
+  }
   if(siteRows){
     siteRows.addEventListener('submit',function(e){
       const f=e.target;
       if(f && f.classList && f.classList.contains('del-form')){
         e.preventDefault();
-        if(confirm('Bu izlemeyi kaldıralım mı?')) sendForm(f);
+        if(confirm('Bu izlemeyi kaldıralım mı?')) sendForm(f,false);
       }
     });
     siteRows.addEventListener('click',function(e){
@@ -442,6 +487,7 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
       document.getElementById('edit-name').value=b.dataset.name||'';
       dialog.showModal();
     });
+    setSiteRows(siteRows.innerHTML);
   }
   if(dialog){
     document.getElementById('edit-cancel').addEventListener('click',function(){dialog.close();});
