@@ -238,14 +238,21 @@ function gb_notify_run(array $cfg, array $results): bool {
     $telegram = $cfg['telegram'] ?? [];
     $evidenceSent = true;
     foreach ($results as $result) {
-        $capture = gb_capture($result['url'] ?? '', $result['name'] ?? 'site');
-        if (($capture['ok'] ?? false) && gb_tg_send_evidence($telegram, $result, $capture)) continue;
+        $http = (int) ($result['http'] ?? 0);
+        if ($http > 0) {
+            $capture = gb_capture($result['url'] ?? '', $result['name'] ?? 'site');
+            if (($capture['ok'] ?? false) && gb_tg_send_evidence($telegram, $result, $capture)) continue;
+            $err = (string) ($capture['error'] ?? 'gönderim hatası');
+        } else {
+            /* HTTP kontrolü sunucuya hiç ulaşamadıysa tarayıcıda fotoğraflanacak sayfa yok — Chrome'u boşuna kaldırma */
+            $err = 'siteye bağlantı kurulamadı (HTTP 0)';
+        }
         $evidenceSent = false;
         gb_tg_send_text($telegram, gb_emoji($result['status']) . ' ' . ($result['name'] ?? '-') .
             "\nSite: " . ($result['url'] ?? '-') .
             "\nGooglebot: " . $result['status'] . ' | Kullanıcı: ' . ($result['ustatus'] ?? '-') .
             "\nHTTP " . ($result['http'] ?? 0) . ' | Beklenen alt: ' . gb_host_of($result['expect'] ?? '') .
-            "\nKanıt görseli üretilemedi: " . ($capture['error'] ?? 'bilinmeyen hata'));
+            "\nKanıt görseli üretilemedi: " . $err);
     }
     return $evidenceSent;
 }

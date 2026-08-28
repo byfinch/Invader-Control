@@ -60,30 +60,16 @@ async function captureView(browser, url, key, userAgent, dir) {
   }
 }
 
-async function capture(url, id) {
-  if (!/^https?:\/\//i.test(url)) throw new Error('invalid URL');
-  const safeId = String(id || 'site').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dir = path.join(ROOT, safeId, stamp);
-  await fs.mkdir(dir, {recursive: true});
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: '/usr/bin/google-chrome-stable',
-    args: ['--disable-dev-shm-usage'],
-  });
+async function captureWork(browser, url, dir) {
   const result = {};
   const errors = {};
-  try {
-    /* iki görünüm paralel — tek yavaş site toplam süreyi ikiye katlamasın */
-    const [g, u] = await Promise.all([
-      captureView(browser, url, 'googlebot', GOOGLEBOT_UA, dir),
-      captureView(browser, url, 'user', USER_UA, dir),
-    ]);
-    if (g.ok) result.googlebot = g.data; else errors.googlebot = g.error;
-    if (u.ok) result.user = u.data; else errors.user = u.error;
-  } finally {
-    await browser.close();
-  }
+  /* iki görünüm paralel — tek yavaş site toplam süreyi ikiye katlamasın */
+  const [g, u] = await Promise.all([
+    captureView(browser, url, 'googlebot', GOOGLEBOT_UA, dir),
+    captureView(browser, url, 'user', USER_UA, dir),
+  ]);
+  if (g.ok) result.googlebot = g.data; else errors.googlebot = g.error;
+  if (u.ok) result.user = u.data; else errors.user = u.error;
   if (!result.googlebot && !result.user) return {ok: false, error: errors.googlebot || errors.user || 'capture failed'};
   const combined = path.join(dir, 'evidence.jpg');
   const args = ['-background', '#111827', '-fill', '#ffffff', '-pointsize', '22'];
@@ -95,6 +81,33 @@ async function capture(url, id) {
   result.combined = {path: combined};
   if (Object.keys(errors).length) result.partial = errors;
   return result;
+}
+
+async function capture(url, id) {
+  if (!/^https?:\/\//i.test(url)) throw new Error('invalid URL');
+  const safeId = String(id || 'site').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const dir = path.join(ROOT, safeId, stamp);
+  await fs.mkdir(dir, {recursive: true});
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath: '/usr/bin/google-chrome-stable',
+    args: ['--disable-dev-shm-usage'],
+  });
+  let watchdog = null;
+  try {
+    /* sert sınır: ne takılırsa takılsın (CDP çağrısının timeout'u yok) 90 sn'de kes */
+    return await Promise.race([
+      captureWork(browser, url, dir),
+      new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('hard capture timeout (90s)')), 90000); }),
+    ]);
+  } catch (error) {
+    try { browser.process()?.kill('SIGKILL'); } catch {}
+    return {ok: false, error: error.message};
+  } finally {
+    if (watchdog) clearTimeout(watchdog);
+    await browser.close().catch(() => {});
+  }
 }
 
 const server = http.createServer(async (req, res) => {
