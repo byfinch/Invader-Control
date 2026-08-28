@@ -37,6 +37,7 @@ async function capture(url, id) {
     args: ['--disable-dev-shm-usage'],
   });
   const result = {};
+  const errors = {};
   try {
     for (const [key, userAgent] of [['googlebot', GOOGLEBOT_UA], ['user', USER_UA]]) {
       const context = await browser.newContext({
@@ -46,11 +47,19 @@ async function capture(url, id) {
       });
       const page = await context.newPage();
       try {
-        const response = await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 30000});
-        await page.waitForTimeout(1000);
+        let response = null;
+        try {
+          response = await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 30000});
+        } catch (navError) {
+          /* bazı siteler domcontentloaded'i hiç bitirmez — commit ile ne yüklendiyse onu yakala */
+          response = await page.goto(url, {waitUntil: 'commit', timeout: 15000}).catch(() => null);
+        }
+        await page.waitForTimeout(1500);
         const file = path.join(dir, `${key}.png`);
         await page.screenshot({path: file, fullPage: false});
-        result[key] = {path: file, http: response?.status() ?? 0, title: await page.title()};
+        result[key] = {path: file, http: response?.status() ?? 0, title: await page.title().catch(() => '')};
+      } catch (viewError) {
+        errors[key] = viewError.message;
       } finally {
         await context.close();
       }
@@ -58,14 +67,16 @@ async function capture(url, id) {
   } finally {
     await browser.close();
   }
+  if (!result.googlebot && !result.user) return {ok: false, error: errors.googlebot || errors.user || 'capture failed'};
   const combined = path.join(dir, 'evidence.jpg');
-  await execFileAsync('/usr/bin/montage', [
-    '-background', '#111827', '-fill', '#ffffff', '-pointsize', '22',
-    '-label', 'GOOGLEBOT', result.googlebot.path,
-    '-label', 'NORMAL KULLANICI', result.user.path,
-    '-tile', '2x1', '-geometry', '720x450+12+42', '-quality', '82', combined,
-  ]);
+  const args = ['-background', '#111827', '-fill', '#ffffff', '-pointsize', '22'];
+  if (result.googlebot) args.push('-label', 'GOOGLEBOT', result.googlebot.path);
+  if (result.user) args.push('-label', 'NORMAL KULLANICI', result.user.path);
+  const views = (result.googlebot ? 1 : 0) + (result.user ? 1 : 0);
+  args.push('-tile', `${views}x1`, '-geometry', '720x450+12+42', '-quality', '82', combined);
+  await execFileAsync('/usr/bin/montage', args);
   result.combined = {path: combined};
+  if (Object.keys(errors).length) result.partial = errors;
   return result;
 }
 

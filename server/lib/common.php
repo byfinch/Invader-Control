@@ -218,12 +218,34 @@ function gb_emoji(string $st): string {
     return ['OK' => "\u{2705}", 'DOWN' => "\u{1F534}", 'BLOCKED' => "\u{26A0}", 'ERROR' => "\u{2754}"][$st] ?? "\u{2754}";
 }
 
+/* Kanıt üretilemediğinde sessiz kalmamak için düz metin bildirim */
+function gb_tg_send_text(array $tg, string $msg): bool {
+    $tk = $tg['token'] ?? ''; $cid = $tg['chat_id'] ?? '';
+    if ($tk === '' || $cid === '') return false;
+    $ch = curl_init("https://api.telegram.org/bot$tk/sendMessage");
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => http_build_query(['chat_id' => $cid, 'text' => $msg]),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 10,
+    ]);
+    $r = json_decode((string) curl_exec($ch), true);
+    curl_close($ch);
+    return ($r['ok'] ?? false) === true;
+}
+
 function gb_notify_run(array $cfg, array $results): bool {
     $telegram = $cfg['telegram'] ?? [];
     $evidenceSent = true;
     foreach ($results as $result) {
         $capture = gb_capture($result['url'] ?? '', $result['name'] ?? 'site');
-        if (!($capture['ok'] ?? false) || !gb_tg_send_evidence($telegram, $result, $capture)) $evidenceSent = false;
+        if (($capture['ok'] ?? false) && gb_tg_send_evidence($telegram, $result, $capture)) continue;
+        $evidenceSent = false;
+        gb_tg_send_text($telegram, gb_emoji($result['status']) . ' ' . ($result['name'] ?? '-') .
+            "\nSite: " . ($result['url'] ?? '-') .
+            "\nGooglebot: " . $result['status'] . ' | Kullanıcı: ' . ($result['ustatus'] ?? '-') .
+            "\nHTTP " . ($result['http'] ?? 0) . ' | Beklenen alt: ' . gb_host_of($result['expect'] ?? '') .
+            "\nKanıt görseli üretilemedi: " . ($capture['error'] ?? 'bilinmeyen hata'));
     }
     return $evidenceSent;
 }
