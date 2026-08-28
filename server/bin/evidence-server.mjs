@@ -83,7 +83,7 @@ async function captureWork(browser, url, dir) {
   return result;
 }
 
-async function capture(url, id) {
+async function capture(url, id, proxy = '') {
   if (!/^https?:\/\//i.test(url)) throw new Error('invalid URL');
   const safeId = String(id || 'site').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -93,6 +93,7 @@ async function capture(url, id) {
     headless: true,
     executablePath: '/usr/bin/google-chrome-stable',
     args: ['--disable-dev-shm-usage'],
+    ...(proxy ? {proxy: {server: proxy}} : {}),   /* coğrafi engelli hedefler için TR çıkışı */
   });
   let watchdog = null;
   try {
@@ -117,7 +118,7 @@ const server = http.createServer(async (req, res) => {
   }
   try {
     const input = await readBody(req);
-    const result = await capture(input.url, input.id);
+    const result = await capture(input.url, input.id, typeof input.proxy === 'string' ? input.proxy : '');
     reply(res, 200, {ok: true, ...result});
   } catch (error) {
     reply(res, 500, {ok: false, error: error.message});

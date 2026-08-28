@@ -3,6 +3,7 @@
         "token": "",
         "chat_id": ""
     },
+    "proxy": "",
     "sites": [
         {
             "name": "lamachine-labkine.com",

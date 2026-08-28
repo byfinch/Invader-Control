@@ -36,9 +36,9 @@ function gb_init_db(string $dbFile): void {
     if (!in_array('usize', $names, true)) gb_db($dbFile)->exec("ALTER TABLE checks ADD COLUMN usize INTEGER DEFAULT 0");
 }
 
-function gb_fetch(string $url, string $ua, int $timeout = 15): array {
+function gb_fetch(string $url, string $ua, int $timeout = 15, string $proxy = ''): array {
     $ch = curl_init($url);
-    curl_setopt_array($ch, [
+    $opts = [
         CURLOPT_USERAGENT => $ua,
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_MAXREDIRS => 5,
@@ -48,7 +48,9 @@ function gb_fetch(string $url, string $ua, int $timeout = 15): array {
         CURLOPT_HEADER => true,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
-    ]);
+    ];
+    if ($proxy !== '') $opts[CURLOPT_PROXY] = $proxy;   /* örn. socks5h://127.0.0.1:1080 veya http://user:pass@host:3128 */
+    curl_setopt_array($ch, $opts);
     $raw = curl_exec($ch);
     $err = curl_error($ch);
     $hs  = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
@@ -119,11 +121,11 @@ function gb_is_challenge(int $code, string $hdr, string $body): bool {
 }
 
 /* Tek site kontrolü — hata fırlatmaz, her zaman sonuç dizisi döner */
-function gb_check(array $site): array {
+function gb_check(array $site, string $proxy = ''): array {
     $url = $site['url'];
     if (!preg_match('~^https?://~i', $url)) $url = 'https://' . $url;
     try {
-        [$code, $hdr, $body, $err] = gb_fetch($url, 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)');
+        [$code, $hdr, $body, $err] = gb_fetch($url, 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)', 15, $proxy);
     } catch (Throwable $e) {
         return ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $e->getMessage(), 'ustatus' => 'ERROR', 'usize' => 0];
     }
@@ -146,7 +148,7 @@ function gb_check(array $site): array {
     /* normal kullanıcı görünümü: ayrı sinyal */
     $r['ustatus'] = 'OK'; $r['usize'] = 0;
     try {
-        [$uc, $uh, $ub, $ue] = gb_fetch($url, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', 12);
+        [$uc, $uh, $ub, $ue] = gb_fetch($url, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', 12, $proxy);
         $r['usize'] = strlen($ub);
         if ($uc === 0) $r['ustatus'] = 'ERROR';
         elseif (gb_is_challenge($uc, $uh, $ub)) $r['ustatus'] = 'BLOCKED';
@@ -171,11 +173,11 @@ function gb_evidence_cleanup(string $base, int $days = 7): void {
     }
 }
 
-function gb_capture(string $url, string $id): array {
+function gb_capture(string $url, string $id, string $proxy = ''): array {
     $ch = curl_init('http://127.0.0.1:6077/capture');
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => json_encode(['url' => $url, 'id' => $id]),
+        CURLOPT_POSTFIELDS => json_encode(['url' => $url, 'id' => $id, 'proxy' => $proxy]),
         CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 130,
@@ -236,11 +238,12 @@ function gb_tg_send_text(array $tg, string $msg): bool {
 
 function gb_notify_run(array $cfg, array $results): bool {
     $telegram = $cfg['telegram'] ?? [];
+    $proxy = (string) ($cfg['proxy'] ?? '');
     $evidenceSent = true;
     foreach ($results as $result) {
         $http = (int) ($result['http'] ?? 0);
         if ($http > 0) {
-            $capture = gb_capture($result['url'] ?? '', $result['name'] ?? 'site');
+            $capture = gb_capture($result['url'] ?? '', $result['name'] ?? 'site', $proxy);
             if (($capture['ok'] ?? false) && gb_tg_send_evidence($telegram, $result, $capture)) continue;
             $err = (string) ($capture['error'] ?? 'gönderim hatası');
         } else {
@@ -262,7 +265,7 @@ function gb_process(array $site, array $cfg, string $dbFile): array {
     gb_init_db($dbFile);
     $url = $site['url'];
     $name = $site['name'] ?? $url;
-    $r = gb_check($site);
+    $r = gb_check($site, (string) ($cfg['proxy'] ?? ''));
 
     gb_db($dbFile)->prepare("INSERT INTO checks(site,status,http,size,alt,note,ustatus,usize) VALUES(?,?,?,?,?,?,?,?)")
         ->execute([$url, $r['status'], $r['http'], $r['size'], implode(',', $r['alt']), $r['note'], $r['ustatus'] ?? '-', $r['usize'] ?? 0]);
