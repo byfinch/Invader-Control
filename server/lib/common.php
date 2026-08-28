@@ -156,19 +156,19 @@ function gb_check(array $site): array {
     return $r;
 }
 
-function gb_tg_send(array $tg, string $msg): bool {
-    $tk = $tg['token'] ?? ''; $cid = $tg['chat_id'] ?? '';
-    if ($tk === '' || $cid === '') return false;
-    $ch = curl_init("https://api.telegram.org/bot$tk/sendMessage");
-    curl_setopt_array($ch, [
-        CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => http_build_query(['chat_id' => $cid, 'text' => $msg]),
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => 10,
-    ]);
-    $r = json_decode((string) curl_exec($ch), true);
-    curl_close($ch);
-    return ($r['ok'] ?? false) === true;
+/* 7 günden eski kanıt dizinlerini sil — disk şişmesin */
+function gb_evidence_cleanup(string $base, int $days = 7): void {
+    $root = "$base/data/evidence";
+    if (!is_dir($root)) return;
+    $limit = time() - $days * 86400;
+    foreach (glob("$root/*", GLOB_ONLYDIR) ?: [] as $siteDir) {
+        foreach (glob("$siteDir/*", GLOB_ONLYDIR) ?: [] as $runDir) {
+            if (filemtime($runDir) < $limit) {
+                foreach (glob("$runDir/*") ?: [] as $f) @unlink($f);
+                @rmdir($runDir);
+            }
+        }
+    }
 }
 
 function gb_capture(string $url, string $id): array {

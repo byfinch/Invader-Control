@@ -35,6 +35,7 @@ function worker_process(array $job): void {
         $job['completed']++; $job['updated_at'] = date('c'); worker_save($job); @file_put_contents("$BASE/data/jobs/active.json", json_encode($job), LOCK_EX);
     }
     $job['status'] = 'completed'; $job['current'] = ''; $job['finished_at'] = date('c'); $job['updated_at'] = date('c'); worker_save($job); @file_put_contents("$BASE/data/jobs/active.json", json_encode($job), LOCK_EX);
+    gb_evidence_cleanup($BASE);
 }
 
 while (true) {

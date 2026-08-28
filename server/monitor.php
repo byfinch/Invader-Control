@@ -31,3 +31,4 @@ foreach ($CFG['sites'] as $s) {
     }
 }
 if ($runResults) printf("Telegram: %s\n", gb_notify_run($CFG, $runResults) ? 'gönderildi' : 'gönderilemedi');
+gb_evidence_cleanup($BASE);
