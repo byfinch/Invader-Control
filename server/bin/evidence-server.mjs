@@ -41,8 +41,17 @@ async function captureView(browser, url, key, userAgent, dir) {
       response = await page.goto(url, {waitUntil: 'commit', timeout: 15000}).catch(() => null);
     }
     await page.waitForTimeout(1500);
+    await page.evaluate(() => window.stop()).catch(() => {}); /* asılı kalan yüklemeyi kes */
     const file = path.join(dir, `${key}.png`);
-    await page.screenshot({path: file, fullPage: false});
+    try {
+      await page.screenshot({path: file, fullPage: false, timeout: 20000});
+    } catch (shotError) {
+      /* font/ağ beklemesinde takılırsa Playwright katmanını atla, CDP ile ham görüntü al */
+      const session = await context.newCDPSession(page);
+      const shot = await session.send('Page.captureScreenshot', {format: 'png'});
+      await fs.writeFile(file, Buffer.from(shot.data, 'base64'));
+      await session.detach().catch(() => {});
+    }
     return {ok: true, data: {path: file, http: response?.status() ?? 0, title: await page.title().catch(() => '')}};
   } catch (viewError) {
     return {ok: false, error: viewError.message};
