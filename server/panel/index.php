@@ -39,16 +39,34 @@ try {
 
     $loginError = '';
     if (isset($_POST['login_user'], $_POST['login_pass'])) {
-        if (($AUTH['user'] ?? '') !== ''
+        /* IP bazlı kilit — oturum silinse bile aşılamaz */
+        $clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+        $attemptsFile = "$BASE/data/login_attempts.json";
+        $attempts = is_file($attemptsFile) ? (json_decode((string) @file_get_contents($attemptsFile), true) ?: []) : [];
+        $entry = $attempts[$clientIp] ?? ['fails' => 0, 'lock_until' => 0];
+        if (time() < (int) $entry['lock_until']) {
+            $loginError = 'Çok fazla hatalı deneme. ' . max(1, (int) ceil(($entry['lock_until'] - time()) / 60)) . ' dakika sonra tekrar deneyin.';
+        } elseif (($AUTH['user'] ?? '') !== ''
             && hash_equals((string) $AUTH['user'], (string) $_POST['login_user'])
             && ($AUTH['hash'] ?? '') !== ''
             && password_verify((string) $_POST['login_pass'], (string) $AUTH['hash'])) {
+            unset($attempts[$clientIp]);
+            @file_put_contents($attemptsFile, json_encode($attempts), LOCK_EX);
             $_SESSION['auth'] = true;
             /* # eklenmezse tarayıcı önceki sayfanın fragment'ını (#history) miras alır */
             header('Location: ' . $_SERVER['PHP_SELF'] . '#');
             exit;
+        } else {
+            $entry['fails'] = (int) $entry['fails'] + 1;
+            if ($entry['fails'] >= 5) {
+                $entry = ['fails' => 0, 'lock_until' => time() + 900];
+                $loginError = 'Çok fazla hatalı deneme. Giriş 15 dakika kilitlendi.';
+            } else {
+                $loginError = 'Kullanıcı adı veya şifre hatalı. (' . $entry['fails'] . '/5)';
+            }
+            $attempts[$clientIp] = $entry;
+            @file_put_contents($attemptsFile, json_encode($attempts), LOCK_EX);
         }
-        $loginError = 'Kullanıcı adı veya şifre hatalı.';
     }
 
     if (empty($_SESSION['auth'])) {
@@ -105,7 +123,7 @@ try {
         <?php endif;
         foreach ($sites as $index => $site):
             $url = $site['url']; $state = $states[$url] ?? null; $check = $last[$url] ?? null; $expected = gb_host_of($site['expect'] ?? ''); $observed = $check['alt'] ?? ''; ?>
-            <tr><td><div class="site-name"><?= h($site['name'] ?? gb_host_of($url)) ?></div><span class="site-url"><?= h($url) ?></span></td><td><span class="expect"><?= h($expected) ?></span></td><td><?= status_badge($state['status'] ?? '-', (string) ($check['note'] ?? '')) ?><span class="status-note">Googlebot</span></td><td><?= status_badge($check['ustatus'] ?? '-') ?><span class="status-note">normal UA</span></td><td><div class="alt-cell"><span class="alt-expected">beklenen: <?= h($expected) ?></span><br><span class="alt-observed <?= ($observed && strpos(',' . $observed . ',', ',' . $expected . ',') === false) ? 'bad' : '' ?>">görülen: <?= h($observed ?: '-') ?></span></div></td><td class="time"><?= h(local_time($check['ts'] ?? null)) ?></td><td class="http"><?= h($check['http'] ?? '-') ?></td><td><div class="row-actions"><button type="button" class="btn btn-dark btn-edit" data-idx="<?= $index ?>" data-name="<?= h($site['name'] ?? '') ?>" data-url="<?= h($url) ?>" data-expect="<?= h($site['expect'] ?? '') ?>">Düzenle</button><form method="post" class="del-form"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="del_site"><input type="hidden" name="idx" value="<?= $index ?>"><button class="btn btn-danger">Sil</button></form></div></td></tr>
+            <tr><td><div class="site-name"><?= h($site['name'] ?? gb_host_of($url)) ?></div><span class="site-url"><?= h($url) ?></span></td><td><span class="expect"><?= h($expected) ?></span></td><td><?= status_badge($state['status'] ?? '-', (string) ($check['note'] ?? '')) ?><span class="status-note">Googlebot</span></td><td><?= status_badge($check['ustatus'] ?? '-', (string) ($check['unote'] ?? '')) ?><span class="status-note">Kullanıcı</span></td><td><div class="alt-cell"><span class="alt-expected">beklenen: <?= h($expected) ?></span><br><span class="alt-observed <?= ($observed && strpos(',' . $observed . ',', ',' . $expected . ',') === false) ? 'bad' : '' ?>">görülen: <?= h($observed ?: '-') ?></span></div></td><td class="time"><?= h(local_time($check['ts'] ?? null)) ?></td><td class="http"><?= h($check['http'] ?? '-') ?></td><td><div class="row-actions"><button type="button" class="btn btn-dark btn-edit" data-ukey="<?= h(gb_url_key($url)) ?>" data-name="<?= h($site['name'] ?? '') ?>" data-url="<?= h($url) ?>" data-expect="<?= h($site['expect'] ?? '') ?>">Düzenle</button><form method="post" class="del-form"><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="del_site"><input type="hidden" name="ukey" value="<?= h(gb_url_key($url)) ?>"><button class="btn btn-danger">Sil</button></form></div></td></tr>
         <?php endforeach;
         return (string) ob_get_clean();
     }
@@ -143,9 +161,12 @@ try {
             $histTotalReq = (int) gb_db($DB_FILE)->query("SELECT COUNT(*) FROM checks")->fetchColumn();
             $histPagesReq = max(1, (int) ceil($histTotalReq / $histPer));
             $histPageReq = min($histPageReq, $histPagesReq);
-            $histRows = gb_db($DB_FILE)->query("SELECT site,ts,status,http,alt,note,ustatus FROM checks ORDER BY id DESC LIMIT $histPer OFFSET " . (($histPageReq - 1) * $histPer))->fetchAll();
+            $histRows = gb_db($DB_FILE)->query("SELECT site,ts,status,http,alt,note,ustatus,unote FROM checks ORDER BY id DESC LIMIT $histPer OFFSET " . (($histPageReq - 1) * $histPer))->fetchAll();
             $out = [];
             foreach ($histRows as $r) {
+                $np = [];
+                if (($r['note'] ?? '') !== '') $np[] = '<b>bot:</b> ' . h((string) $r['note']);
+                if (($r['unote'] ?? '') !== '') $np[] = '<b>kullanıcı:</b> ' . h((string) $r['unote']);
                 $out[] = [
                     'ts' => local_time($r['ts']),
                     'site' => (string) $r['site'],
@@ -153,7 +174,7 @@ try {
                     'ustatus' => status_badge($r['ustatus'] ?? '-'),
                     'http' => (string) $r['http'],
                     'alt' => $r['alt'] !== '' ? (string) $r['alt'] : '-',
-                    'note' => $r['note'] !== '' ? (string) $r['note'] : '-',
+                    'note_html' => $np ? implode(' <span class="nsep">|</span> ', $np) : '-',
                 ];
             }
             echo json_encode(['ok' => true, 'page' => $histPageReq, 'pages' => $histPagesReq, 'total' => $histTotalReq, 'per' => $histPer, 'rows' => $out]);
@@ -236,9 +257,13 @@ try {
                     else $error = 'Yapılandırma dosyası yazılamadı.';
                 }
             } elseif ($action === 'edit_site') {
-                $index = (int) ($_POST['idx'] ?? -1);
-                if (!isset($CFG['sites'][$index])) {
-                    $error = 'Düzenlenecek kayıt bulunamadı.';
+                $ukey = (string) ($_POST['ukey'] ?? '');
+                $index = -1;
+                foreach (($CFG['sites'] ?? []) as $i => $s) {
+                    if ($ukey !== '' && gb_url_key($s['url'] ?? '') === $ukey) { $index = $i; break; }
+                }
+                if ($index < 0 || !isset($CFG['sites'][$index])) {
+                    $error = 'Düzenlenecek kayıt bulunamadı. Liste değişmiş olabilir — sayfayı yenileyin.';
                 } else {
                     $url = trim((string) ($_POST['s_url'] ?? ''));
                     $expect = trim((string) ($_POST['s_expect'] ?? ''));
@@ -266,12 +291,18 @@ try {
                     }
                 }
             } elseif ($action === 'del_site') {
-                $index = (int) ($_POST['idx'] ?? -1);
-                if (isset($CFG['sites'][$index])) {
+                $ukey = (string) ($_POST['ukey'] ?? '');
+                $index = -1;
+                foreach (($CFG['sites'] ?? []) as $i => $s) {
+                    if ($ukey !== '' && gb_url_key($s['url'] ?? '') === $ukey) { $index = $i; break; }
+                }
+                if ($index >= 0 && isset($CFG['sites'][$index])) {
                     $removed = $CFG['sites'][$index]['name'] ?? $CFG['sites'][$index]['url'];
                     array_splice($CFG['sites'], $index, 1);
                     if (save_cfg($CFG, $CFG_FILE)) $message = 'İzleme kaldırıldı: ' . $removed;
                     else $error = 'Yapılandırma dosyası yazılamadı.';
+                } else {
+                    $error = 'Kayıt bulunamadı. Liste değişmiş olabilir — sayfayı yenileyin.';
                 }
             }
         } catch (Throwable $e) { $error = 'Islem hatasi: ' . $e->getMessage(); }
@@ -296,7 +327,7 @@ try {
         $historyPages = max(1, (int) ceil($historyTotal / $historyPerPage));
         $historyPage = min($historyPage, $historyPages);
         $historyOffset = ($historyPage - 1) * $historyPerPage;
-        $history = gb_db($DB_FILE)->query("SELECT site,ts,status,http,alt,note,ustatus FROM checks ORDER BY id DESC LIMIT $historyPerPage OFFSET $historyOffset")->fetchAll();
+        $history = gb_db($DB_FILE)->query("SELECT site,ts,status,http,alt,note,ustatus,unote FROM checks ORDER BY id DESC LIMIT $historyPerPage OFFSET $historyOffset")->fetchAll();
         $lastRun = gb_db($DB_FILE)->query("SELECT ts FROM checks ORDER BY id DESC LIMIT 1")->fetchColumn() ?: null;
     } catch (Throwable $e) { $error .= ($error ? ' | ' : '') . 'Veritabani: ' . $e->getMessage(); }
 
@@ -349,7 +380,7 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
 .section{margin-top:30px}.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:13px}.section-title{display:flex;align-items:baseline;gap:11px}.section-title h2{font-size:17px;margin:0;font-weight:600;font-family:var(--head-font);letter-spacing:-.3px}.section-sub{color:var(--muted);font-size:12px;margin:4px 0 0}.section-head details{position:relative}.section-head summary{list-style:none;cursor:pointer}.section-head summary::-webkit-details-marker{display:none}.add-pop{position:absolute;right:0;top:42px;width:380px;padding:18px;z-index:5;border:1px solid transparent;background:linear-gradient(var(--paper2),var(--paper2)) padding-box,linear-gradient(135deg,rgba(57,255,106,.45),#12301c 60%) border-box;clip-path:var(--chamfer-lg)}.add-pop h3{font-size:13px;margin:0 0 14px}.field{display:block;margin-bottom:10px}.field span{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}.field input{width:100%;padding:9px 10px;border:1px solid transparent;background:linear-gradient(#020602,#020602) padding-box,linear-gradient(135deg,#1c4226,#0e2415) border-box;clip-path:var(--chamfer-sm);color:var(--ink);outline:none}.field input:focus{box-shadow:0 0 14px rgba(57,255,106,.15)}.field .hint{display:block;color:var(--muted);font-size:10px;margin-top:4px;opacity:.85}.add-actions{display:flex;justify-content:flex-end;margin-top:14px;gap:8px}.row-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}.row-actions form{margin:0}.edit-dialog{border:1px solid transparent;background:linear-gradient(var(--paper2),var(--paper2)) padding-box,linear-gradient(135deg,rgba(57,255,106,.45),#12301c 60%) border-box;clip-path:var(--chamfer-lg);padding:20px;width:min(420px,calc(100vw - 32px));color:var(--ink)}.edit-dialog::backdrop{background:rgba(0,0,0,.72)}.edit-dialog h3{font-size:13px;margin:0 0 14px;font-family:var(--head-font);text-transform:uppercase;letter-spacing:1px}.form-error{color:var(--red);font-size:12px;margin:0 0 10px;font-family:var(--head-font)}
 .table-shell{border:1px solid transparent;background:linear-gradient(var(--paper),var(--paper)) padding-box,linear-gradient(135deg,rgba(57,255,106,.45),#12301c 60%) border-box;clip-path:var(--chamfer-lg);overflow-x:auto}.site-table{width:100%;border-collapse:collapse;min-width:850px}.site-table th{padding:12px 15px;text-align:left;background:var(--paper2);color:#4f7a5c;border-bottom:1px solid var(--line);font-size:10px;letter-spacing:1px;text-transform:uppercase;font-weight:700}.site-table td{padding:16px 15px;border-bottom:1px solid #0e2415;vertical-align:middle}.site-table tr:last-child td{border-bottom:0}.site-table tbody tr:hover{background:#081408}.site-name{font-weight:680}.site-url{display:block;color:var(--muted);font-size:11px;margin-top:3px;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.expect{font-family:var(--head-font);font-size:12px;color:#7fae8d}.status{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:760;letter-spacing:.45px;border:1px solid currentColor;padding:2px 7px;clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px)}.status i{width:8px;height:8px;border-radius:50%;background:#98a5b2;box-shadow:0 0 8px currentColor}.status.ok{color:var(--lime)}.status.ok i{background:var(--lime)}.status.info{color:#7ab8ff}.status.info i{background:#7ab8ff}.status.down,.status.error{color:var(--red)}.status.down i,.status.error i{background:var(--red)}.status.warn{color:var(--amber)}.status.warn i{background:var(--amber)}.status.idle{color:var(--muted)}.status-note{display:block;margin-top:4px;color:var(--muted);font-size:11px}.status[data-err]{cursor:help}
 #err-tip{position:fixed;z-index:100;width:min(420px,80vw);padding:16px 18px;background:linear-gradient(#0a140b,#0a140b) padding-box,linear-gradient(135deg,rgba(255,77,94,.6),#5c1f27) border-box;border:1px solid transparent;clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px);opacity:0;visibility:hidden;transform:translateY(4px);transition:opacity .15s,transform .15s,visibility .15s;text-align:left}#err-tip.show{opacity:1;visibility:visible;transform:translateY(0)}#err-tip .tip-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:12px}#err-tip .tip-head b{color:var(--red);font:600 10px var(--head-font);letter-spacing:1.2px;text-transform:uppercase}#err-tip .tip-text{display:block;font:12px/1.7 var(--head-font);color:#e9c9cd;word-break:break-word;user-select:text;cursor:text;max-height:160px;overflow-y:auto;padding-right:4px}.tip-copy{border:1px solid #5c1f27;background:#140505;color:#ff8b96;font:600 10px/12px var(--head-font);padding:4px 8px;cursor:pointer;clip-path:polygon(4px 0,100% 0,100% calc(100% - 4px),calc(100% - 4px) 100%,0 100%,0 4px);white-space:nowrap;min-width:98px;height:22px;text-align:center}.tip-copy:hover{background:#241014}.tip-copy.done{color:var(--lime);border-color:#1d4d28;background:#071608}.alt-cell{font-family:var(--head-font);font-size:11px;line-height:1.7}.alt-expected{color:var(--muted)}.alt-observed{color:#a9d8b6}.alt-observed.bad{color:var(--red)}.time{font-family:var(--head-font);color:var(--muted);font-size:11px;white-space:nowrap}.http{font-family:var(--head-font);font-size:12px;color:var(--muted)}.empty-state{text-align:center;padding:36px;color:var(--muted)}
-.history{margin-top:30px}.history-table{margin-top:13px}.history-table .site-url{max-width:220px}.history-table .note{color:var(--muted);font-size:11px;max-width:280px}.page-label{font-size:11px;color:var(--muted);font-family:var(--head-font)}.pagination{display:flex;align-items:center;justify-content:flex-end;gap:5px;margin-top:14px}.pagination a,.pagination span{min-width:30px;height:30px;padding:6px 9px;text-align:center;border:1px solid var(--line);color:var(--muted);text-decoration:none;font-size:12px;background:var(--paper);clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px)}.pagination a:hover{border-color:var(--lime);color:var(--lime)}.pagination .current{background:var(--lime);border-color:var(--lime);color:#021108;font-weight:700}.pagination .ellipsis{border-color:transparent;background:transparent;min-width:16px;clip-path:none}.footer-note{text-align:left;border-top:1px solid var(--line);padding-top:14px;color:var(--muted);font-size:11px;margin-top:22px}
+.history{margin-top:30px}.history-table{margin-top:13px}.history-table .site-url{max-width:220px}.history-table .note{color:#8fc39c;font-size:11px;max-width:320px}.note b{color:#e9c9cd;font-weight:600}.note .nsep{color:#3f6b4c}.page-label{font-size:11px;color:var(--muted);font-family:var(--head-font)}.pagination{display:flex;align-items:center;justify-content:flex-end;gap:5px;margin-top:14px}.pagination a,.pagination span{min-width:30px;height:30px;padding:6px 9px;text-align:center;border:1px solid var(--line);color:var(--muted);text-decoration:none;font-size:12px;background:var(--paper);clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px)}.pagination a:hover{border-color:var(--lime);color:var(--lime)}.pagination .current{background:var(--lime);border-color:var(--lime);color:#021108;font-weight:700}.pagination .ellipsis{border-color:transparent;background:transparent;min-width:16px;clip-path:none}.footer-note{text-align:left;border-top:1px solid var(--line);padding-top:14px;color:var(--muted);font-size:11px;margin-top:22px}
 @media(max-width:850px){.summary{grid-template-columns:1fr 1fr}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}.intro{align-items:flex-start;flex-direction:column}.intro form{width:100%}.intro form .btn{width:100%}.rp-counters{grid-template-columns:1fr 1fr}}
 @media(max-width:560px){.topbar{height:64px;padding:0 16px}.brand-mark-image{width:36px;height:36px}.brand-copy strong{font-size:13px;letter-spacing:1.6px}.brand-copy span{font-size:8px}.wrap{padding:30px 14px 42px}.intro h1{font-size:26px}.intro p{max-width:330px}.summary{grid-template-columns:1fr 1fr}.metric{padding:15px 14px;min-height:91px}.metric-value{font-size:23px}.metric-note{font-size:10px}.section-title h2{font-size:16px}.add-pop{position:fixed;right:14px;left:14px;top:115px;width:auto}.monitor-shell{overflow:visible}.monitor-table,.monitor-table tbody{display:block;min-width:0}.monitor-table thead{display:none}.monitor-table tr{display:block;position:relative;padding:10px 0;border-bottom:1px solid var(--line)}.monitor-table tr:last-child{border-bottom:0}.monitor-table td{display:flex;justify-content:space-between;gap:16px;padding:8px 15px;border:0;text-align:right}.monitor-table td:first-child{display:block;text-align:left;padding-right:65px;padding-bottom:12px}.monitor-table td:last-child{position:absolute;right:14px;top:16px;display:block;padding:0}.monitor-table td:nth-child(2):before{content:'Beklenen';color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}.monitor-table td:nth-child(3):before{content:'Googlebot';color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}.monitor-table td:nth-child(4):before{content:'Kullanıcı';color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}.monitor-table td:nth-child(5):before{content:'Alternate';color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}.monitor-table td:nth-child(6):before{content:'Son kontrol';color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}.monitor-table td:nth-child(7):before{content:'HTTP';color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}.monitor-table td:nth-child(5) .alt-cell{text-align:right}.pagination{justify-content:center}.history-table{overflow-x:auto}.footer-note{font-size:10px}}
 </style>
@@ -379,8 +410,8 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
     <nav class="pagination site-pagination" id="site-pagination" aria-label="İzlenen siteler sayfaları"></nav>
   </section>
 
-  <section class="history" id="history"><div class="section-head"><div><div class="section-title"><span class="section-no">03</span><h2>Kontrol geçmişi</h2></div><p class="section-sub">Her sayfada <?= $historyPerPage ?> kayıt gösteriliyor · toplam <?= $historyTotal ?> kayıt</p></div><span class="page-label" id="history-label">Sayfa <?= $historyPage ?> / <?= $historyPages ?></span></div><div class="table-shell history-table"><table class="site-table"><thead><tr><th>Zaman</th><th>Site</th><th>Googlebot</th><th>Kullanıcı</th><th>HTTP</th><th>Alternate</th><th>Not</th></tr></thead><tbody id="history-rows"><?php if (!$history): ?><tr><td colspan="7" class="empty-state">Henüz kontrol kaydı yok.</td></tr><?php endif; ?><?php foreach ($history as $row): ?><tr><td class="time"><?= h(local_time($row['ts'])) ?></td><td><span class="site-url"><?= h($row['site']) ?></span></td><td><?= status_badge($row['status']) ?></td><td><?= status_badge($row['ustatus'] ?? '-') ?></td><td class="http"><?= h($row['http']) ?></td><td class="expect"><?= h($row['alt'] ?: '-') ?></td><td class="note"><?= h($row['note'] ?: '-') ?></td></tr><?php endforeach; ?></tbody></table></div><nav class="pagination" aria-label="Kontrol geçmişi sayfaları"><?php if ($historyPage > 1): ?><a href="?page=<?= $historyPage - 1 ?>#history">Önceki</a><?php endif; ?><?php for ($p = 1; $p <= $historyPages; $p++): if ($p === $historyPage): ?><span class="current"><?= $p ?></span><?php elseif ($p <= 3 || $p > $historyPages - 2 || abs($p - $historyPage) <= 1): ?><a href="?page=<?= $p ?>#history"><?= $p ?></a><?php elseif ($p === 4 || $p === $historyPages - 2): ?><span class="ellipsis">…</span><?php endif; endfor; ?><?php if ($historyPage < $historyPages): ?><a href="?page=<?= $historyPage + 1 ?>#history">Sonraki</a><?php endif; ?></nav></section>
-  <dialog class="edit-dialog" id="edit-dialog"><form method="post" id="edit-site-form"><h3>İzlemeyi düzenle</h3><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="edit_site"><input type="hidden" name="idx" id="edit-idx"><label class="field"><span>İzlenecek URL</span><input name="s_url" id="edit-url" placeholder="site.com" required><small class="hint">http://, https://, www. fark etmez — olduğu gibi yapıştırın.</small></label><label class="field"><span>Beklenen alternate domain</span><input name="s_expect" id="edit-expect" placeholder="milanbahis.cam" required><small class="hint">Sadece domain yeterli; link yapıştırırsanız domaini ayıklarız.</small></label><label class="field"><span>Panel adı <small>(opsiyonel)</small></span><input name="s_name" id="edit-name" placeholder="site adı"></label><div class="add-actions"><button type="button" class="btn btn-quiet" id="edit-cancel">Vazgeç</button><button class="btn btn-primary">Kaydet</button></div></form></dialog>
+  <section class="history" id="history"><div class="section-head"><div><div class="section-title"><span class="section-no">03</span><h2>Kontrol geçmişi</h2></div><p class="section-sub">Her sayfada <?= $historyPerPage ?> kayıt gösteriliyor · toplam <?= $historyTotal ?> kayıt</p></div><span class="page-label" id="history-label">Sayfa <?= $historyPage ?> / <?= $historyPages ?></span></div><div class="table-shell history-table"><table class="site-table"><thead><tr><th>Zaman</th><th>Site</th><th>Googlebot</th><th>Kullanıcı</th><th>HTTP</th><th>Alternate</th><th>Not</th></tr></thead><tbody id="history-rows"><?php if (!$history): ?><tr><td colspan="7" class="empty-state">Henüz kontrol kaydı yok.</td></tr><?php endif; ?><?php foreach ($history as $row): ?><tr><td class="time"><?= h(local_time($row['ts'])) ?></td><td><span class="site-url"><?= h($row['site']) ?></span></td><td><?= status_badge($row['status']) ?></td><td><?= status_badge($row['ustatus'] ?? '-') ?></td><td class="http"><?= h($row['http']) ?></td><td class="expect"><?= h($row['alt'] ?: '-') ?></td><td class="note"><?php $np = []; if (($row['note'] ?? '') !== '') $np[] = '<b>bot:</b> ' . h((string) $row['note']); if (($row['unote'] ?? '') !== '') $np[] = '<b>kullanıcı:</b> ' . h((string) $row['unote']); echo $np ? implode(' <span class="nsep">|</span> ', $np) : '-'; ?></td></tr><?php endforeach; ?></tbody></table></div><nav class="pagination" aria-label="Kontrol geçmişi sayfaları"><?php if ($historyPage > 1): ?><a href="?page=<?= $historyPage - 1 ?>#history">Önceki</a><?php endif; ?><?php for ($p = 1; $p <= $historyPages; $p++): if ($p === $historyPage): ?><span class="current"><?= $p ?></span><?php elseif ($p <= 3 || $p > $historyPages - 2 || abs($p - $historyPage) <= 1): ?><a href="?page=<?= $p ?>#history"><?= $p ?></a><?php elseif ($p === 4 || $p === $historyPages - 2): ?><span class="ellipsis">…</span><?php endif; endfor; ?><?php if ($historyPage < $historyPages): ?><a href="?page=<?= $historyPage + 1 ?>#history">Sonraki</a><?php endif; ?></nav></section>
+  <dialog class="edit-dialog" id="edit-dialog"><form method="post" id="edit-site-form"><h3>İzlemeyi düzenle</h3><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><input type="hidden" name="act" value="edit_site"><input type="hidden" name="ukey" id="edit-ukey"><label class="field"><span>İzlenecek URL</span><input name="s_url" id="edit-url" placeholder="site.com" required><small class="hint">http://, https://, www. fark etmez — olduğu gibi yapıştırın.</small></label><label class="field"><span>Beklenen alternate domain</span><input name="s_expect" id="edit-expect" placeholder="milanbahis.cam" required><small class="hint">Sadece domain yeterli; link yapıştırırsanız domaini ayıklarız.</small></label><label class="field"><span>Panel adı <small>(opsiyonel)</small></span><input name="s_name" id="edit-name" placeholder="site adı"></label><div class="add-actions"><button type="button" class="btn btn-quiet" id="edit-cancel">Vazgeç</button><button class="btn btn-primary">Kaydet</button></div></form></dialog>
   <div class="footer-note">Son ölçüm zamanları Europe/Istanbul · HTTP kontrolü Googlebot User-Agent ile yapılır</div>
 </main>
 <div id="err-tip" role="tooltip"><span class="tip-head"><b>Detay</b><button class="tip-copy" type="button">⧉ kopyala</button></span><span class="tip-text"></span></div>
@@ -528,7 +559,7 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
     siteRows.addEventListener('click',function(e){
       const b=e.target.closest('.btn-edit');
       if(!b || !dialog) return;
-      document.getElementById('edit-idx').value=b.dataset.idx||'';
+      document.getElementById('edit-ukey').value=b.dataset.ukey||'';
       document.getElementById('edit-url').value=b.dataset.url||'';
       document.getElementById('edit-expect').value=b.dataset.expect||'';
       document.getElementById('edit-name').value=b.dataset.name||'';
@@ -583,7 +614,7 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
       const d=await r.json();
       if(!d.ok) throw new Error(d.error||'hata');
       tbody.innerHTML=d.rows.map(function(row){
-        return '<tr><td class="time">'+esc(row.ts)+'</td><td><span class="site-url">'+esc(row.site)+'</span></td><td>'+row.status+'</td><td>'+row.ustatus+'</td><td class="http">'+esc(row.http)+'</td><td class="expect">'+esc(row.alt)+'</td><td class="note">'+esc(row.note)+'</td></tr>';
+        return '<tr><td class="time">'+esc(row.ts)+'</td><td><span class="site-url">'+esc(row.site)+'</span></td><td>'+row.status+'</td><td>'+row.ustatus+'</td><td class="http">'+esc(row.http)+'</td><td class="expect">'+esc(row.alt)+'</td><td class="note">'+(row.note_html||'-')+'</td></tr>';
       }).join('') || '<tr><td colspan="7" class="empty-state">Henüz kontrol kaydı yok.</td></tr>';
       nav.innerHTML=renderNav(d.page,d.pages);
       label.textContent='Sayfa '+d.page+' / '+d.pages;

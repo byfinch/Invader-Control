@@ -37,6 +37,7 @@ function gb_init_db(string $dbFile): void {
     $names = array_column($cols, 'name');
     if (!in_array('ustatus', $names, true)) gb_db($dbFile)->exec("ALTER TABLE checks ADD COLUMN ustatus TEXT DEFAULT '-'");
     if (!in_array('usize', $names, true)) gb_db($dbFile)->exec("ALTER TABLE checks ADD COLUMN usize INTEGER DEFAULT 0");
+    if (!in_array('unote', $names, true)) gb_db($dbFile)->exec("ALTER TABLE checks ADD COLUMN unote TEXT DEFAULT ''");
 }
 
 function gb_fetch(string $url, string $ua, int $timeout = 15, string $proxy = ''): array {
@@ -123,43 +124,87 @@ function gb_is_challenge(int $code, string $hdr, string $body): bool {
     return false;
 }
 
+const GB_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
+const USER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+/* İki görünümü tek seferde paralel çek — site başına bekleme yarıya iner */
+function gb_fetch_pair(string $url, int $timeout, string $proxy = ''): array {
+    $mk = function (string $ua) use ($url, $timeout, $proxy) {
+        $ch = curl_init($url);
+        $opts = [
+            CURLOPT_USERAGENT => $ua,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 5,
+            CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_CONNECTTIMEOUT => min($timeout, 20),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER => true,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ];
+        if ($proxy !== '') $opts[CURLOPT_PROXY] = $proxy;
+        curl_setopt_array($ch, $opts);
+        return $ch;
+    };
+    $a = $mk(GB_UA); $b = $mk(USER_UA);
+    $mh = curl_multi_init();
+    curl_multi_add_handle($mh, $a); curl_multi_add_handle($mh, $b);
+    $running = null;
+    do { curl_multi_exec($mh, $running); if ($running) curl_multi_select($mh, 1.0); } while ($running);
+    $read = function ($ch) {
+        $raw = curl_multi_getcontent($ch);
+        $err = curl_error($ch);
+        $hs  = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        if ($raw === false || $code === 0) return [0, '', '', $err !== '' ? $err : 'istek başarısız'];
+        return [$code, substr($raw, 0, $hs), substr($raw, $hs), $err];
+    };
+    $ra = $read($a); $rb = $read($b);
+    curl_multi_remove_handle($mh, $a); curl_multi_remove_handle($mh, $b);
+    curl_multi_close($mh); curl_close($a); curl_close($b);
+    return [$ra, $rb];
+}
+
 /* Tek site kontrolü — hata fırlatmaz, her zaman sonuç dizisi döner */
 function gb_check(array $site, string $proxy = ''): array {
     $url = $site['url'];
     if (!preg_match('~^https?://~i', $url)) $url = 'https://' . $url;
     try {
-        [$code, $hdr, $body, $err] = gb_fetch($url, 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)', 25, $proxy);
-        if ($code === 0) { sleep(1); [$code, $hdr, $body, $err] = gb_fetch($url, 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)', 25, $proxy); }  /* kasıtlı yavaşlatmaya bir şans daha */
+        [$bot, $usr] = gb_fetch_pair($url, 25, $proxy);
+        /* kasıtlı yavaşlatmaya bir şans daha — sadece düşen taraf tek başına tekrarlanır */
+        if ($bot[0] === 0) { sleep(1); $bot = gb_fetch($url, GB_UA, 25, $proxy); }
+        if ($usr[0] === 0) { sleep(1); $usr = gb_fetch($url, USER_UA, 20, $proxy); }
     } catch (Throwable $e) {
-        return ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $e->getMessage(), 'ustatus' => 'ERROR', 'usize' => 0];
+        return ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $e->getMessage(), 'ustatus' => 'ERROR', 'usize' => 0, 'unote' => $e->getMessage()];
     }
-    if ($code === 0) return ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $err, 'ustatus' => 'ERROR', 'usize' => 0];
-    if (gb_is_challenge($code, $hdr, $body)) return ['status' => 'BLOCKED', 'http' => $code, 'size' => strlen($body), 'alt' => [], 'note' => 'bot korumasi', 'ustatus' => '-', 'usize' => 0];
+    [$code, $hdr, $body, $err] = $bot;
+    [$uc, $uh, $ub, $ue] = $usr;
 
-    $alts = gb_alternates($body);
-    $expect = gb_host_of((string) ($site['expect'] ?? ''));
-    if ($expect === '') {
-        $r = ['status' => 'OBSERVED', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => $alts ? '' : 'alternate link yok'];
-    } elseif (in_array($expect, $alts, true)) {
-        $r = ['status' => 'OK', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => ''];
-    } elseif (!$alts) {
-        $hasHtml = stripos($body, '<body') !== false || stripos($body, '<title') !== false;
-        $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => [], 'note' => $hasHtml ? 'alternate link yok' : 'HTML donmedi'];
+    if ($code === 0) {
+        $r = ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $err];
+    } elseif (gb_is_challenge($code, $hdr, $body)) {
+        $r = ['status' => 'BLOCKED', 'http' => $code, 'size' => strlen($body), 'alt' => [], 'note' => 'bot korumasi'];
     } else {
-        $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => 'alternate: ' . implode(', ', $alts)];
+        $alts = gb_alternates($body);
+        $expect = gb_host_of((string) ($site['expect'] ?? ''));
+        if ($expect === '') {
+            $r = ['status' => 'OBSERVED', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => $alts ? '' : 'alternate link yok'];
+        } elseif (in_array($expect, $alts, true)) {
+            $r = ['status' => 'OK', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => ''];
+        } elseif (!$alts) {
+            $hasHtml = stripos($body, '<body') !== false || stripos($body, '<title') !== false;
+            $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => [], 'note' => $hasHtml ? 'alternate link yok' : 'HTML donmedi'];
+        } else {
+            $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => 'alternate: ' . implode(', ', $alts)];
+        }
     }
 
-    /* normal kullanıcı görünümü: ayrı sinyal */
-    $r['ustatus'] = 'OK'; $r['usize'] = 0;
-    try {
-        [$uc, $uh, $ub, $ue] = gb_fetch($url, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', 20, $proxy);
-        if ($uc === 0) { sleep(1); [$uc, $uh, $ub, $ue] = gb_fetch($url, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', 20, $proxy); }
-        $r['usize'] = strlen($ub);
-        if ($uc === 0) $r['ustatus'] = 'ERROR';
-        elseif (gb_is_challenge($uc, $uh, $ub)) $r['ustatus'] = 'BLOCKED';
-        elseif ($uc >= 400) $r['ustatus'] = 'DOWN';
-        elseif (strlen($ub) < 512) $r['ustatus'] = 'EMPTY';   /* 200 ama bos/kucuk govde */
-    } catch (Throwable $e) { $r['ustatus'] = 'ERROR'; }
+    /* normal kullanıcı görünümü: ayrı sinyal + sebep notu (bot düşse bile çalışır) */
+    $r['ustatus'] = 'OK'; $r['usize'] = strlen($ub); $r['unote'] = '';
+    if ($uc === 0) { $r['ustatus'] = 'ERROR'; $r['unote'] = $ue; }
+    elseif (gb_is_challenge($uc, $uh, $ub)) { $r['ustatus'] = 'BLOCKED'; $r['unote'] = 'bot korumasi'; }
+    elseif ($uc >= 400) { $r['ustatus'] = 'DOWN'; $r['unote'] = 'HTTP ' . $uc; }
+    elseif (strlen($ub) < 512) { $r['ustatus'] = 'EMPTY'; $r['unote'] = 'HTTP 200 ama gövde ' . strlen($ub) . ' bayt — boş/kısmi sayfa'; }
     return $r;
 }
 
@@ -176,6 +221,11 @@ function gb_evidence_cleanup(string $base, int $days = 7): void {
             }
         }
     }
+}
+
+/* kontrol geçmişi sınırsız büyümesin — varsayılan 90 gün */
+function gb_db_cleanup(string $dbFile, int $days = 90): void {
+    gb_db($dbFile)->exec("DELETE FROM checks WHERE ts < datetime('now', '-$days days')");
 }
 
 function gb_capture(string $url, string $id, string $proxy = ''): array {
@@ -204,7 +254,8 @@ function gb_tg_send_evidence(array $tg, array $result, array $capture): bool {
         "\nGooglebot: " . $result['status'] . ' | Kullanıcı: ' . ($result['ustatus'] ?? '-') .
         "\nHTTP " . ($result['http'] ?? 0) . ' | Beklenen alt: ' . gb_host_of($result['expect'] ?? '') .
         "\nGörülen alt: " . ($result['alt'] ? implode(', ', $result['alt']) : '-') .
-        ($result['note'] !== '' ? "\nNot: " . $result['note'] : '');
+        ($result['note'] !== '' ? "\nNot: " . $result['note'] : '') .
+        (($result['unote'] ?? '') !== '' ? "\nKullanıcı notu: " . $result['unote'] : '');
     $ch = curl_init("https://api.telegram.org/bot$tk/sendPhoto");
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
@@ -260,7 +311,8 @@ function gb_notify_run(array $cfg, array $results): bool {
             "\nSite: " . ($result['url'] ?? '-') .
             "\nGooglebot: " . $result['status'] . ' | Kullanıcı: ' . ($result['ustatus'] ?? '-') .
             "\nHTTP " . ($result['http'] ?? 0) . ' | Beklenen alt: ' . gb_host_of($result['expect'] ?? '') .
-            "\nKanıt görseli üretilemedi: " . $err);
+            "\nKanıt görseli üretilemedi: " . $err .
+            (($result['unote'] ?? '') !== '' ? "\nKullanıcı notu: " . $result['unote'] : ''));
     }
     return $evidenceSent;
 }
@@ -272,8 +324,8 @@ function gb_process(array $site, array $cfg, string $dbFile): array {
     $name = $site['name'] ?? $url;
     $r = gb_check($site, (string) ($cfg['proxy'] ?? ''));
 
-    gb_db($dbFile)->prepare("INSERT INTO checks(site,status,http,size,alt,note,ustatus,usize) VALUES(?,?,?,?,?,?,?,?)")
-        ->execute([$url, $r['status'], $r['http'], $r['size'], implode(',', $r['alt']), $r['note'], $r['ustatus'] ?? '-', $r['usize'] ?? 0]);
+    gb_db($dbFile)->prepare("INSERT INTO checks(site,status,http,size,alt,note,ustatus,usize,unote) VALUES(?,?,?,?,?,?,?,?,?)")
+        ->execute([$url, $r['status'], $r['http'], $r['size'], implode(',', $r['alt']), $r['note'], $r['ustatus'] ?? '-', $r['usize'] ?? 0, $r['unote'] ?? '']);
 
     $q = gb_db($dbFile)->prepare("SELECT status, user_status, blocked_streak FROM state WHERE site=?");
     $q->execute([$url]);

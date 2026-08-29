@@ -36,6 +36,7 @@ function worker_process(array $job): void {
     }
     $job['status'] = 'completed'; $job['current'] = ''; $job['finished_at'] = date('c'); $job['updated_at'] = date('c'); worker_save($job); @file_put_contents("$BASE/data/jobs/active.json", json_encode($job), LOCK_EX);
     gb_evidence_cleanup($BASE);
+    gb_db_cleanup("$BASE/data/gbwatch.db");
 }
 
 while (true) {
