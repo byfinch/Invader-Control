@@ -43,7 +43,7 @@ function gb_fetch(string $url, string $ua, int $timeout = 15, string $proxy = ''
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_MAXREDIRS => 5,
         CURLOPT_TIMEOUT => $timeout,
-        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_CONNECTTIMEOUT => min($timeout, 20),   /* kasıtlı yavaşlatan hedefler TLS'i 10sn üstüne taşıyabiliyor */
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_HEADER => true,
         CURLOPT_SSL_VERIFYPEER => true,
@@ -125,7 +125,8 @@ function gb_check(array $site, string $proxy = ''): array {
     $url = $site['url'];
     if (!preg_match('~^https?://~i', $url)) $url = 'https://' . $url;
     try {
-        [$code, $hdr, $body, $err] = gb_fetch($url, 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)', 15, $proxy);
+        [$code, $hdr, $body, $err] = gb_fetch($url, 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)', 25, $proxy);
+        if ($code === 0) { sleep(1); [$code, $hdr, $body, $err] = gb_fetch($url, 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)', 25, $proxy); }  /* kasıtlı yavaşlatmaya bir şans daha */
     } catch (Throwable $e) {
         return ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $e->getMessage(), 'ustatus' => 'ERROR', 'usize' => 0];
     }
@@ -148,7 +149,8 @@ function gb_check(array $site, string $proxy = ''): array {
     /* normal kullanıcı görünümü: ayrı sinyal */
     $r['ustatus'] = 'OK'; $r['usize'] = 0;
     try {
-        [$uc, $uh, $ub, $ue] = gb_fetch($url, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', 12, $proxy);
+        [$uc, $uh, $ub, $ue] = gb_fetch($url, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', 20, $proxy);
+        if ($uc === 0) { sleep(1); [$uc, $uh, $ub, $ue] = gb_fetch($url, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', 20, $proxy); }
         $r['usize'] = strlen($ub);
         if ($uc === 0) $r['ustatus'] = 'ERROR';
         elseif (gb_is_challenge($uc, $uh, $ub)) $r['ustatus'] = 'BLOCKED';

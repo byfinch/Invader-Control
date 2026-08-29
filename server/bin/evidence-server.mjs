@@ -83,6 +83,17 @@ async function captureWork(browser, url, dir) {
   return result;
 }
 
+function parseProxy(p) {
+  /* Playwright kullanıcı/şifreyi server URL'sinin içinden almaz — ayrık alanlara çevir */
+  try {
+    const u = new URL(p);
+    const out = {server: `${u.protocol}//${u.hostname}${u.port ? ':' + u.port : ''}`};
+    if (u.username) out.username = decodeURIComponent(u.username);
+    if (u.password) out.password = decodeURIComponent(u.password);
+    return out;
+  } catch { return {server: p}; }
+}
+
 async function capture(url, id, proxy = '') {
   if (!/^https?:\/\//i.test(url)) throw new Error('invalid URL');
   const safeId = String(id || 'site').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
@@ -93,7 +104,7 @@ async function capture(url, id, proxy = '') {
     headless: true,
     executablePath: '/usr/bin/google-chrome-stable',
     args: ['--disable-dev-shm-usage'],
-    ...(proxy ? {proxy: {server: proxy}} : {}),   /* coğrafi engelli hedefler için TR çıkışı */
+    ...(proxy ? {proxy: parseProxy(proxy)} : {}),   /* coğrafi engelli hedefler için TR çıkışı */
   });
   let watchdog = null;
   try {
