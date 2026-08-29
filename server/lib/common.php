@@ -237,9 +237,10 @@ function gb_check(array $site, array $net = []): array {
         if ($usr[0] === 0) { sleep(1); $usr = gb_net_fetch($url, USER_UA, 'user', 20, $direct); }
         /* doğrudan hiç ulaşılamıyorsa veya bot engelliyorsa relay'e düş */
         $relay = (string) ($net['relay'] ?? '');
+        $viaRelay = false;
         if ($relay !== '' && ($bot[0] === 0 || gb_is_challenge($bot[0], $bot[1], $bot[2]))) {
             [$botR, $usrR] = gb_fetch_pair($url, 25, $net);
-            if ($botR[0] !== 0 && !gb_is_challenge($botR[0], $botR[1], $botR[2])) { $bot = $botR; $usr = $usrR; }
+            if ($botR[0] !== 0 && !gb_is_challenge($botR[0], $botR[1], $botR[2])) { $bot = $botR; $usr = $usrR; $viaRelay = true; }
         }
     } catch (Throwable $e) {
         return ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $e->getMessage(), 'ustatus' => 'ERROR', 'usize' => 0, 'unote' => $e->getMessage()];
@@ -263,6 +264,12 @@ function gb_check(array $site, array $net = []): array {
             $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => [], 'note' => $hasHtml ? 'alternate link yok' : 'HTML donmedi'];
         } else {
             $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => 'alternate: ' . implode(', ', $alts)];
+        }
+        /* relay yedeğinden gelen "alternate yok/uymuyor" güvenilmez (zıt kutuplu cloak):
+           DOWN yerine OBSERVED — yanıltıcı alarm üretme */
+        if ($viaRelay && $r['status'] === 'DOWN') {
+            $r['status'] = 'OBSERVED';
+            $r['note'] = 'direct başarısız, relay ile: ' . $r['note'];
         }
     }
 
