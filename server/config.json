@@ -6,6 +6,7 @@
     "proxy": "",
     "relay": "",
     "relay_key": "",
+    "alert_users": [],
     "sites": [
         {
             "name": "lamachine-labkine.com",

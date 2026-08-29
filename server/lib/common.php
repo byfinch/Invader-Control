@@ -313,11 +313,11 @@ function gb_capture(string $url, string $id, string $proxy = '', string $relay =
     return $result;
 }
 
-function gb_tg_send_evidence(array $tg, array $result, array $capture): bool {
-    $tk = $tg['token'] ?? ''; $cid = $tg['chat_id'] ?? '';
+function gb_tg_send_evidence(array $tg, array $result, array $capture, ?string $chatId = null, string $prefix = ''): bool {
+    $tk = $tg['token'] ?? ''; $cid = $chatId ?? ((string) ($tg['chat_id'] ?? ''));
     $file = $capture['combined']['path'] ?? '';
     if ($tk === '' || $cid === '' || !is_file($file)) return false;
-    $caption = gb_emoji($result['status']) . ' ' . $result['name'] .
+    $caption = $prefix . gb_emoji($result['status']) . ' ' . $result['name'] .
         "\nSite: " . ($result['url'] ?? '-') .
         "\nGooglebot: " . $result['status'] . ' | Kullanıcı: ' . ($result['ustatus'] ?? '-') .
         "\nHTTP " . ($result['http'] ?? 0) . ' | Beklenen alt: ' . gb_host_of($result['expect'] ?? '') .
@@ -345,8 +345,8 @@ function gb_emoji(string $st): string {
 }
 
 /* Kanıt üretilemediğinde sessiz kalmamak için düz metin bildirim */
-function gb_tg_send_text(array $tg, string $msg): bool {
-    $tk = $tg['token'] ?? ''; $cid = $tg['chat_id'] ?? '';
+function gb_tg_send_text(array $tg, string $msg, ?string $chatId = null): bool {
+    $tk = $tg['token'] ?? ''; $cid = $chatId ?? ((string) ($tg['chat_id'] ?? ''));
     if ($tk === '' || $cid === '') return false;
     $ch = curl_init("https://api.telegram.org/bot$tk/sendMessage");
     curl_setopt_array($ch, [
@@ -363,24 +363,54 @@ function gb_tg_send_text(array $tg, string $msg): bool {
 function gb_notify_run(array $cfg, array $results): bool {
     $telegram = $cfg['telegram'] ?? [];
     $proxy = (string) ($cfg['proxy'] ?? '');
+    $alertUsers = array_values(array_filter(array_map('intval', (array) ($cfg['alert_users'] ?? []))));
     $evidenceSent = true;
     foreach ($results as $result) {
         $http = (int) ($result['http'] ?? 0);
+        $bad = in_array($result['status'] ?? '', ['DOWN', 'ERROR', 'BLOCKED'], true);
+        $prev = $result['previous_status'] ?? null;
+        $becameBad = $bad && $prev !== null && $prev !== $result['status'];
+        $recovered = !$bad && $prev !== null && in_array($prev, ['DOWN', 'ERROR', 'BLOCKED'], true);
+
+        $capture = null;
         if ($http > 0) {
             $capture = gb_capture($result['url'] ?? '', $result['name'] ?? 'site', $proxy, (string) ($cfg['relay'] ?? ''), (string) ($cfg['relay_key'] ?? ''));
-            if (($capture['ok'] ?? false) && gb_tg_send_evidence($telegram, $result, $capture)) continue;
-            $err = (string) ($capture['error'] ?? 'gönderim hatası');
-        } else {
-            /* HTTP kontrolü sunucuya hiç ulaşamadıysa tarayıcıda fotoğraflanacak sayfa yok — Chrome'u boşuna kaldırma */
-            $err = 'siteye bağlantı kurulamadı (HTTP 0)';
         }
-        $evidenceSent = false;
-        gb_tg_send_text($telegram, gb_emoji($result['status']) . ' ' . ($result['name'] ?? '-') .
-            "\nSite: " . ($result['url'] ?? '-') .
-            "\nGooglebot: " . $result['status'] . ' | Kullanıcı: ' . ($result['ustatus'] ?? '-') .
-            "\nHTTP " . ($result['http'] ?? 0) . ' | Beklenen alt: ' . gb_host_of($result['expect'] ?? '') .
-            "\nKanıt görseli üretilemedi: " . $err .
-            (($result['unote'] ?? '') !== '' ? "\nKullanıcı notu: " . $result['unote'] : ''));
+
+        /* kanal: mevcut davranış — her koşuda kanıt */
+        if ($capture && ($capture['ok'] ?? false) && gb_tg_send_evidence($telegram, $result, $capture)) {
+            // kanala kanıt gitti
+        } else {
+            $err = $http > 0 ? (string) ($capture['error'] ?? 'gönderim hatası') : 'siteye bağlantı kurulamadı (HTTP 0)';
+            $evidenceSent = false;
+            gb_tg_send_text($telegram, gb_emoji($result['status']) . ' ' . ($result['name'] ?? '-') .
+                "\nSite: " . ($result['url'] ?? '-') .
+                "\nGooglebot: " . $result['status'] . ' | Kullanıcı: ' . ($result['ustatus'] ?? '-') .
+                "\nHTTP " . ($result['http'] ?? 0) . ' | Beklenen alt: ' . gb_host_of($result['expect'] ?? '') .
+                "\nKanıt görseli üretilemedi: " . $err .
+                (($result['unote'] ?? '') !== '' ? "\nKullanıcı notu: " . $result['unote'] : ''));
+        }
+
+        /* özel DM: sadece durum değişiminde (düşüş veya düzelme) */
+        if (($becameBad || $recovered) && $alertUsers) {
+            $now = (new DateTime('now', new DateTimeZone('Europe/Istanbul')))->format('d.m.Y H:i');
+            $prefix = $becameBad
+                ? '🔴 ' . ($result['name'] ?? '-') . ' düştü' . "\n"
+                : '✅ ' . ($result['name'] ?? '-') . ' düzeldi (' . ($result['status'] ?? 'OK') . ')' . "\n";
+            $dmText = $prefix . 'Site: ' . ($result['url'] ?? '-') .
+                "\nGooglebot: " . ($prev ?? '-') . ' → ' . $result['status'] . ' | Kullanıcı: ' . ($result['previous_user_status'] ?? '-') . ' → ' . ($result['ustatus'] ?? '-') .
+                "\nHTTP " . ($result['http'] ?? 0) . ' | Beklenen alt: ' . gb_host_of($result['expect'] ?? '') .
+                "\nGörülen alt: " . ($result['alt'] ? implode(', ', $result['alt']) : '-') .
+                ($result['note'] !== '' ? "\nNot: " . $result['note'] : '') .
+                "\n🕐 $now (TSİ)";
+            foreach ($alertUsers as $uid) {
+                $sent = false;
+                if ($becameBad && $capture && ($capture['ok'] ?? false)) {
+                    $sent = gb_tg_send_evidence($telegram, $result, $capture, (string) $uid, $prefix);
+                }
+                if (!$sent) gb_tg_send_text($telegram, $dmText, (string) $uid);
+            }
+        }
     }
     return $evidenceSent;
 }
