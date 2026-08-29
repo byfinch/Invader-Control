@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { chromium } from '/opt/gbwatch/render/node_modules/playwright-core/index.mjs';
 
-const PORT = 6077;
+const PORT = Number(process.env.PORT || 6077);
 const ROOT = '/opt/gbwatch/data/evidence';
 const GOOGLEBOT_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
 const USER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -136,18 +136,24 @@ async function captureTranslateView(browser, url, dir) {
     if (!resp.ok) throw new Error('translate http ' + resp.status);
     let html = await resp.text();
     html = html.replace(/<head([^>]*)>/i, '<head$1><base href="' + TH + '/">');
+    let loadedCss = 0;
+    page.on('response', (r) => { if (r.request().resourceType() === 'stylesheet' && r.ok()) loadedCss++; });
     await context.route('**/*', (route) => {
       const req = route.request();
       const type = req.resourceType();
       const u = req.url();
       const okHost = u.startsWith(TH) || u.includes('googleapis.com') || u.includes('gstatic.com');
       if ((type === 'stylesheet' || type === 'image') && okHost) {
-        const timer = setTimeout(() => route.abort().catch(() => {}), 6000);
+        const timer = setTimeout(() => route.abort().catch(() => {}), 8000);
         return route.continue().finally(() => clearTimeout(timer));
       }
       return route.abort().catch(() => {});
     });
     await page.setContent(html, {waitUntil: 'load', timeout: 25000}).catch(() => {});
+    if (loadedCss === 0) {
+      /* ilk pas origin yavaşlığına denk gelmiş olabilir; Google cache ısındı, bir pas daha */
+      await page.setContent(html, {waitUntil: 'load', timeout: 25000}).catch(() => {});
+    }
     await page.waitForTimeout(1500);
     await page.addStyleTag({content: '.goog-te-banner-frame,.goog-te-banner,#goog-gt-tt,.goog-te-balloon-frame,#goog-gt-vc{display:none!important}body{top:0!important;position:static!important}'}).catch(() => {});
     const file = path.join(dir, 'user.png');
@@ -181,7 +187,11 @@ async function captureWork(browser, url, dir, proxy, relay, relayKey) {
     const gHtml = await fetchViaRelay(relay, relayKey, url, 'bot');
     [g, u] = await Promise.all([
       captureRelayView(browser, rewriteAssets(gHtml.body, host), 'googlebot', dir),
-      captureTranslateView(browser, url, dir),
+      (async () => {
+        /* sağlıklı sitelerde eski yol: doğrudan çekim. Sadece engellenirse translate'e düş */
+        const direct = await captureView(browser, url, 'user', USER_UA, dir);
+        return direct.ok ? direct : captureTranslateView(browser, url, dir);
+      })(),
     ]);
   } else {
     /* iki görünüm paralel — tek yavaş site toplam süreyi ikiye katlamasın */
