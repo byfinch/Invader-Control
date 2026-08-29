@@ -50,6 +50,8 @@ function gb_net_fetch(string $url, string $ua, string $uaKind, int $timeout, arr
         $ch = curl_init($rurl);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,   /* Apps Script önce googleusercontent'e 302 atar */
+            CURLOPT_MAXREDIRS => 3,
             CURLOPT_TIMEOUT => $timeout + 15,   /* relay'ın kendi fetch'i de süre yer */
             CURLOPT_CONNECTTIMEOUT => min($timeout, 20),
             CURLOPT_SSL_VERIFYPEER => true,
@@ -167,6 +169,8 @@ function gb_fetch_pair(string $url, int $timeout, array $net = []): array {
             $ch = curl_init($relay . $sep . 'u=' . urlencode($url) . '&ua=' . $uaKind . '&k=' . urlencode((string) ($net['relay_key'] ?? '')));
             curl_setopt_array($ch, [
                 CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS => 3,
                 CURLOPT_TIMEOUT => $timeout + 15,
                 CURLOPT_CONNECTTIMEOUT => min($timeout, 20),
                 CURLOPT_SSL_VERIFYPEER => true,
