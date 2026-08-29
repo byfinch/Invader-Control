@@ -33,7 +33,7 @@ try {
 
     if (isset($_POST['logout'])) {
         session_destroy();
-        header('Location: ' . $_SERVER['PHP_SELF']);
+        header('Location: ' . $_SERVER['PHP_SELF'] . '#');
         exit;
     }
 
@@ -44,7 +44,8 @@ try {
             && ($AUTH['hash'] ?? '') !== ''
             && password_verify((string) $_POST['login_pass'], (string) $AUTH['hash'])) {
             $_SESSION['auth'] = true;
-            header('Location: ' . $_SERVER['PHP_SELF']);
+            /* # eklenmezse tarayıcı önceki sayfanın fragment'ını (#history) miras alır */
+            header('Location: ' . $_SERVER['PHP_SELF'] . '#');
             exit;
         }
         $loginError = 'Kullanıcı adı veya şifre hatalı.';
@@ -278,7 +279,7 @@ try {
     /* JS'siz istem: post → yönlendir (PRG) ki yenileme formu tekrar göndermesin */
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($_POST['ajax'])) {
         $_SESSION['flash_m'] = $message; $_SESSION['flash_e'] = $error;
-        header('Location: ' . $_SERVER['PHP_SELF']);
+        header('Location: ' . $_SERVER['PHP_SELF'] . '#');
         exit;
     }
 
