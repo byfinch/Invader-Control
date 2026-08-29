@@ -8,6 +8,9 @@ function gb_db(string $dbFile): PDO {
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         ]);
+        /* cron + panel aynı anda yazabilir: kilitte 5sn bekle, WAL ile okuma/yazma çakışmasın */
+        $pdo->exec('PRAGMA busy_timeout=5000');
+        $pdo->exec('PRAGMA journal_mode=WAL');
     }
     return $pdo;
 }

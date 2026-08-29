@@ -48,7 +48,12 @@ while (true) {
             $job['status'] = 'queued'; worker_save($job);
         }
         if (($job['status'] ?? '') !== 'queued') continue;
-        $found = true; worker_process($job); break;
+        /* cron koşusuyla çakışmayı önle: kilit doluysa iş kuyrukta kalsın, bir sonraki turda dene */
+        $runLock = fopen("$BASE/data/run.lock", 'c');
+        if ($runLock === false || !flock($runLock, LOCK_EX | LOCK_NB)) break;
+        $found = true; worker_process($job);
+        flock($runLock, LOCK_UN); fclose($runLock);
+        break;
     }
     if (!$found) usleep(500000);
 }

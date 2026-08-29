@@ -51,6 +51,13 @@ try {
     }
 
     if (empty($_SESSION['auth'])) {
+        /* AJAX/JSON uçlarına login sayfası dönme: 401 ver ki istemci doğru tepki versin */
+        if (isset($_GET['job']) || isset($_GET['hist']) || isset($_GET['sites']) || !empty($_POST['ajax']) || ($_POST['act'] ?? '') === 'start_run') {
+            header('Content-Type: application/json; charset=utf-8');
+            http_response_code(401);
+            echo json_encode(['ok' => false, 'error' => 'auth']);
+            exit;
+        }
         $error = $loginError !== '' ? '<p class="login-error">' . htmlspecialchars($loginError, ENT_QUOTES, 'UTF-8') . '</p>' : '';
         die("<!doctype html><html lang='tr'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><link rel='icon' href='/assets/favicon.svg?v=2' type='image/svg+xml'><link rel='shortcut icon' href='/assets/favicon.svg?v=2' type='image/svg+xml'><title>Invader Control</title>
         <style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:32px 16px;background:#020402;background-image:linear-gradient(rgba(57,255,106,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(57,255,106,.05) 1px,transparent 1px);background-size:28px 28px;color:#c9ffd6;font:14px system-ui,-apple-system,sans-serif}.login{position:relative;width:min(470px,100%);padding:48px;border:1px solid transparent;background:linear-gradient(#050805,#050805) padding-box,linear-gradient(160deg,rgba(57,255,106,.6),#12301c 55%,rgba(57,255,106,.25)) border-box;clip-path:polygon(22px 0,100% 0,100% calc(100% - 22px),calc(100% - 22px) 100%,0 100%,0 22px);box-shadow:0 0 60px rgba(57,255,106,.1)}.login:before{content:'// AUTH MODULE v2.1 — IDENTIFY YOURSELF';display:block;color:#39ff6a;font:10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:1.4px;margin-bottom:30px}.login-brand{display:flex;align-items:center;gap:17px;margin-bottom:38px}.login-brand img{display:block;width:64px;height:64px;filter:drop-shadow(0 0 12px rgba(57,255,106,.45))}.login-brand strong{display:block;color:#e9fff0;font-size:19px;letter-spacing:2.2px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.login-brand span{display:block;margin-top:6px;color:#5f8a6a;font-size:10px;letter-spacing:1.9px}.login h1{color:#e9fff0;font-size:29px;font-weight:650;letter-spacing:-.7px;margin:0 0 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase}.login p{color:#5f8a6a;line-height:1.65;margin:0 0 27px}.login-error{color:#ff4d5e!important}.login label{display:block;color:#8fc39c;font-size:12px;font-weight:600;letter-spacing:.2px;margin:19px 0 7px}.login input{width:100%;padding:13px;border:1px solid transparent;background:linear-gradient(#020602,#020602) padding-box,linear-gradient(135deg,#1c4226,#0e2415) border-box;clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px);color:#c9ffd6;outline:none;transition:box-shadow .18s}.login input:focus{box-shadow:0 0 18px rgba(57,255,106,.18)}.login button{width:100%;margin-top:26px;padding:14px;border:0;background:#39ff6a;color:#021108;font-weight:700;cursor:pointer;letter-spacing:2px;text-transform:uppercase;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px);transition:background .15s}.login button:hover{background:#6dff92}@media(max-width:560px){.login{padding:32px 22px}}</style></head><body>
@@ -71,7 +78,11 @@ try {
     }
     function save_cfg(array $cfg, string $file): bool {
         $json = json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        return $json !== false && @file_put_contents($file, $json) !== false;
+        if ($json === false) return false;
+        /* atomik yazım: yarım config okunmasın */
+        $tmp = $file . '.tmp';
+        if (@file_put_contents($tmp, $json, LOCK_EX) === false) return false;
+        return @rename($tmp, $file);
     }
     function status_label(string $status): string {
         return ['OK' => 'OK', 'OBSERVED' => 'GÖZLEMLENDİ', 'DOWN' => 'DÜŞÜK', 'BLOCKED' => 'ENGELLİ', 'ERROR' => 'HATA', 'EMPTY' => 'BOŞ', '-' => 'BEKLİYOR'][$status] ?? $status;
@@ -147,6 +158,29 @@ try {
         } catch (Throwable $e) {
             http_response_code(500); echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
         }
+        exit;
+    }
+
+    if (isset($_GET['sites'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        try {
+            gb_init_db($DB_FILE);
+            $st = []; $la = [];
+            foreach (gb_db($DB_FILE)->query("SELECT site,status,since,user_status FROM state")->fetchAll() as $row) $st[$row['site']] = $row;
+            foreach (gb_db($DB_FILE)->query("SELECT c.* FROM checks c JOIN (SELECT site,MAX(id) mid FROM checks GROUP BY site) x ON x.mid=c.id")->fetchAll() as $row) $la[$row['site']] = $row;
+            $cfgNow = load_cfg($CFG_FILE);
+            $oc = 0;
+            foreach (($cfgNow['sites'] ?? []) as $s) { if (($st[$s['url']]['status'] ?? '') === 'OK') $oc++; }
+            $lr = gb_db($DB_FILE)->query("SELECT ts FROM checks ORDER BY id DESC LIMIT 1")->fetchColumn();
+            echo json_encode([
+                'ok' => true,
+                'tbody' => render_site_rows($cfgNow, $st, $la, $csrf),
+                'siteCount' => count($cfgNow['sites'] ?? []),
+                'okCount' => $oc,
+                'attentionCount' => count($cfgNow['sites'] ?? []) - $oc,
+                'lastRun' => local_time($lr ?: null),
+            ]);
+        } catch (Throwable $e) { http_response_code(500); echo json_encode(['ok' => false, 'error' => $e->getMessage()]); }
         exit;
     }
 
@@ -368,14 +402,23 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
     cDone.textContent=done; cOk.textContent=ok; cDown.textContent=down; cWarn.textContent=warn;
     const base=total||1;
     setSeg(sOk,ok*100/base); setSeg(sDown,down*100/base); setSeg(sWarn,warn*100/base); setSeg(sLeft,Math.max(0,(total-done)*100/base));
-    if(job.status==='completed'){current.textContent='Tüm sitelerin sonuçları işlendi. Telegram kanıtları gönderildi.';eta.textContent='';resetButton();setTimeout(function(){location.reload()},900);return;}
+    if(job.status==='completed'){
+      const results=Array.isArray(job.results)?job.results:[];
+      const sent=results.filter(function(r){return r.notified;}).length;
+      title.textContent='Kontrol tamamlandı';
+      current.textContent=results.length+' site işlendi. Telegram kanıtı: '+sent+'/'+results.length+(sent<results.length?' — gönderilemeyen var' : '');
+      eta.textContent='';
+      resetButton();
+      if(window.refreshSites) window.refreshSites();
+      return;
+    }
     current.textContent=job.current ? '▸ '+job.current+' kontrol ediliyor...' : 'Kontrol hazırlanıyor...';
     if(done>0 && total>done && job.started_at){const t0=Date.parse(job.started_at);if(!isNaN(t0)){eta.textContent='~'+Math.round((Date.now()-t0)/1000/done*(total-done))+' sn kaldı';}}else eta.textContent='';
     button.disabled=true;button.textContent='Kontrol çalışıyor...';
     setTimeout(function(){poll(job.id)},1000);
   }
-  async function poll(id){try{const response=await fetch('?job='+encodeURIComponent(id),{cache:'no-store'});const job=await response.json();showJob(job);}catch(e){showError('İlerleme bilgisi alınamadı. Sunucu işi çalışmaya devam ediyor olabilir.');}}
-  form.addEventListener('submit',async function(event){event.preventDefault();button.disabled=true;button.textContent='Kontrol başlatılıyor...';box.hidden=false;box.classList.remove('error');title.textContent='Kontrol başlatılıyor';count.textContent='';current.textContent='Sunucu işi hazırlanıyor...';eta.textContent='';cDone.textContent='0';cOk.textContent='0';cDown.textContent='0';cWarn.textContent='0';setSeg(sOk,0);setSeg(sDown,0);setSeg(sWarn,0);setSeg(sLeft,100);try{const response=await fetch(location.pathname,{method:'POST',body:new FormData(form),headers:{'X-Requested-With':'XMLHttpRequest'}});const data=await response.json();if(!data.ok) throw new Error(data.error||'Bilinmeyen hata');poll(data.job_id);}catch(e){showError(e.message);}});
+  async function poll(id){try{const response=await fetch('?job='+encodeURIComponent(id),{cache:'no-store'});if(response.status===401){showError('Oturum süresi doldu. Giriş sayfasına yönlendiriliyorsunuz...');setTimeout(function(){location.reload()},1200);return;}const job=await response.json();showJob(job);}catch(e){showError('İlerleme bilgisi alınamadı. Sunucu işi çalışmaya devam ediyor olabilir.');}}
+  form.addEventListener('submit',async function(event){event.preventDefault();button.disabled=true;button.textContent='Kontrol başlatılıyor...';box.hidden=false;box.classList.remove('error');title.textContent='Kontrol başlatılıyor';count.textContent='';current.textContent='Sunucu işi hazırlanıyor...';eta.textContent='';cDone.textContent='0';cOk.textContent='0';cDown.textContent='0';cWarn.textContent='0';setSeg(sOk,0);setSeg(sDown,0);setSeg(sWarn,0);setSeg(sLeft,100);try{const response=await fetch(location.pathname,{method:'POST',body:new FormData(form),headers:{'X-Requested-With':'XMLHttpRequest'}});if(response.status===401){location.reload();return;}const data=await response.json();if(!data.ok) throw new Error(data.error||'Bilinmeyen hata');poll(data.job_id);}catch(e){showError(e.message);}});
   fetch('?job=active',{cache:'no-store'}).then(r=>r.json()).then(job=>{if(job&&job.id&&job.status==='running') poll(job.id);}).catch(function(){});
 })();
 </script>
@@ -433,7 +476,7 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
   async function sendForm(form, jumpLast){
     const fd=new FormData(form); fd.append('ajax','1');
     let d=null;
-    try{const r=await fetch(location.pathname,{method:'POST',body:fd,headers:{'X-Requested-With':'XMLHttpRequest'}}); d=await r.json();}
+    try{const r=await fetch(location.pathname,{method:'POST',body:fd,headers:{'X-Requested-With':'XMLHttpRequest'}}); if(r.status===401){location.reload();return null;} d=await r.json();}
     catch(e){ d={ok:false,error:'İstek gönderilemedi. Bağlantıyı kontrol edin.'}; }
     if(d.ok){
       showFlash(d.message,true);
@@ -493,6 +536,23 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
     document.getElementById('edit-cancel').addEventListener('click',function(){dialog.close();});
     dialog.addEventListener('click',function(e){if(e.target===dialog) dialog.close();});
   }
+  /* tur bitince sayfa yenilemeden tabloyu tazelemek için */
+  window.refreshSites=async function(){
+    try{
+      const r=await fetch('?sites=1',{cache:'no-store'});
+      if(r.status===401){location.reload();return;}
+      const d=await r.json();
+      if(!d.ok) return;
+      setSiteRows(d.tbody);
+      if(metricValues.length>=4){
+        metricValues[0].textContent=d.siteCount;
+        metricValues[1].textContent=d.okCount;
+        metricValues[2].textContent=d.attentionCount;
+        metricValues[2].classList.toggle('bad', Number(d.attentionCount)>0);
+        metricValues[3].textContent=d.lastRun;
+      }
+    }catch(e){}
+  };
 })();
 </script>
 <script>
@@ -515,6 +575,7 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
   async function go(page){
     try{
       const r=await fetch('?hist='+page,{cache:'no-store'});
+      if(r.status===401){location.reload();return;}
       const d=await r.json();
       if(!d.ok) throw new Error(d.error||'hata');
       tbody.innerHTML=d.rows.map(function(row){

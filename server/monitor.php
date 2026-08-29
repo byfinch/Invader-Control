@@ -18,6 +18,10 @@ if ($cmd === 'test' && isset($argv[2])) {
 
 if ($cmd !== 'run') { fwrite(STDERR, "kullanim: php monitor.php run | test <url>\n"); exit(1); }
 
+/* panelden başlatılan tur ile çakışma: kilit doluysa bu turu atla */
+$runLock = fopen("$BASE/data/run.lock", 'c');
+if ($runLock === false || !flock($runLock, LOCK_EX | LOCK_NB)) { fwrite(STDOUT, "onceki kosu suruyor, atlandi\n"); exit(0); }
+
 $runResults = [];
 foreach ($CFG['sites'] as $s) {
     try {
