@@ -110,26 +110,67 @@ async function captureRelayView(browser, html, key, dir) {
   }
 }
 
+/* kullanıcı görünümünü Google translate proxy üzerinden çek — engelli host'a istek gitmez,
+   translate gerçek (cloak'suz) sayfayı döndürür */
+function translateUrl(target) {
+  const u = new URL(target);
+  const thost = u.host.replace(/\./g, '-');
+  return 'https://' + thost + '.translate.goog' + (u.pathname || '/') +
+    (u.search ? u.search + '&' : '?') + '_x_tr_sl=auto&_x_tr_tl=tr&_x_tr_hl=tr';
+}
+
+async function captureTranslateView(browser, url, dir) {
+  const context = await browser.newContext({
+    userAgent: USER_UA,
+    viewport: {width: 1440, height: 900},
+    deviceScaleFactor: 1,
+  });
+  const page = await context.newPage();
+  try {
+    /* HTML'i tarayıcısız çek (hızlı), görselleştirmeyi yerelde yap.
+       origin kasten süründürüyor + translate CSS'i JS'siz içeriği gizliyor:
+       tüm alt kaynakları kes, saf içeriği işle — stilsiz ama gerçek görüntü. */
+    const turl = translateUrl(url);
+    const resp = await fetch(turl, {redirect: 'follow'});
+    if (!resp.ok) throw new Error('translate http ' + resp.status);
+    const html = await resp.text();
+    await context.route('**/*', (route) => route.abort().catch(() => {}));
+    await page.setContent(html, {waitUntil: 'load', timeout: 10000}).catch(() => {});
+    await page.waitForTimeout(800);
+    await page.addStyleTag({content: '.goog-te-banner-frame,.goog-te-banner,#goog-gt-tt,.goog-te-balloon-frame,#goog-gt-vc{display:none!important}body{top:0!important;position:static!important}'}).catch(() => {});
+    const file = path.join(dir, 'user.png');
+    try {
+      await page.screenshot({path: file, fullPage: false, timeout: 10000});
+    } catch (shotError) {
+      const session = await context.newCDPSession(page);
+      const shot = await Promise.race([
+        session.send('Page.captureScreenshot', {format: 'png'}),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('cdp screenshot timeout')), 8000)),
+      ]);
+      await fs.writeFile(file, Buffer.from(shot.data, 'base64'));
+      await session.detach().catch(() => {});
+    }
+    return {ok: true, data: {path: file, http: 200, title: await page.title().catch(() => '')}};
+  } catch (e) {
+    return {ok: false, error: e.message};
+  } finally {
+    await context.close();
+  }
+}
+
 async function captureWork(browser, url, dir, proxy, relay, relayKey) {
   const result = {};
   const errors = {};
   let g, u;
   if (relay) {
     /* googlebot görünümü relay'den (Google IP'si → cloak'u görür, doğru sinyal).
-       normal kullanıcı görünümü vekil üzerinden (varsa) — gerçek kullanıcı gibi;
-       vekil yoksa son çare relay (Google altyapısının gördüğü hâl). */
+       normal kullanıcı görünümü translate proxy'den (gerçek site, cloak'suz). */
     const host = new URL(url).host;
     const gHtml = await fetchViaRelay(relay, relayKey, url, 'bot');
-    const jobs = [captureRelayView(browser, rewriteAssets(gHtml.body, host), 'googlebot', dir)];
-    if (proxy) {
-      jobs.push(captureView(browser, url, 'user', USER_UA, dir));
-    } else {
-      jobs.push((async () => {
-        const uHtml = await fetchViaRelay(relay, relayKey, url, 'user');
-        return captureRelayView(browser, rewriteAssets(uHtml.body, host), 'user', dir);
-      })());
-    }
-    [g, u] = await Promise.all(jobs);
+    [g, u] = await Promise.all([
+      captureRelayView(browser, rewriteAssets(gHtml.body, host), 'googlebot', dir),
+      captureTranslateView(browser, url, dir),
+    ]);
   } else {
     /* iki görünüm paralel — tek yavaş site toplam süreyi ikiye katlamasın */
     [g, u] = await Promise.all([
