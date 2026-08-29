@@ -229,10 +229,18 @@ function gb_check(array $site, array $net = []): array {
     $url = $site['url'];
     if (!preg_match('~^https?://~i', $url)) $url = 'https://' . $url;
     try {
-        [$bot, $usr] = gb_fetch_pair($url, 25, $net);
+        /* önce doğrudan/proxy — bazı cloaklar Google altyapısına gerçek sayfa gösterir */
+        $direct = ['proxy' => (string) ($net['proxy'] ?? '')];
+        [$bot, $usr] = gb_fetch_pair($url, 25, $direct);
         /* kasıtlı yavaşlatmaya bir şans daha — sadece düşen taraf tek başına tekrarlanır */
-        if ($bot[0] === 0) { sleep(1); $bot = gb_net_fetch($url, GB_UA, 'bot', 25, $net); }
-        if ($usr[0] === 0) { sleep(1); $usr = gb_net_fetch($url, USER_UA, 'user', 20, $net); }
+        if ($bot[0] === 0) { sleep(1); $bot = gb_net_fetch($url, GB_UA, 'bot', 25, $direct); }
+        if ($usr[0] === 0) { sleep(1); $usr = gb_net_fetch($url, USER_UA, 'user', 20, $direct); }
+        /* doğrudan hiç ulaşılamıyorsa veya bot engelliyorsa relay'e düş */
+        $relay = (string) ($net['relay'] ?? '');
+        if ($relay !== '' && ($bot[0] === 0 || gb_is_challenge($bot[0], $bot[1], $bot[2]))) {
+            [$botR, $usrR] = gb_fetch_pair($url, 25, $net);
+            if ($botR[0] !== 0 && !gb_is_challenge($botR[0], $botR[1], $botR[2])) { $bot = $botR; $usr = $usrR; }
+        }
     } catch (Throwable $e) {
         return ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $e->getMessage(), 'ustatus' => 'ERROR', 'usize' => 0, 'unote' => $e->getMessage()];
     }

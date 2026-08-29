@@ -184,9 +184,15 @@ async function captureWork(browser, url, dir, proxy, relay, relayKey) {
     /* googlebot görünümü relay'den (Google IP'si → cloak'u görür, doğru sinyal).
        normal kullanıcı görünümü translate proxy'den (gerçek site, cloak'suz). */
     const host = new URL(url).host;
-    const gHtml = await fetchViaRelay(relay, relayKey, url, 'bot');
     [g, u] = await Promise.all([
-      captureRelayView(browser, rewriteAssets(gHtml.body, host), 'googlebot', dir),
+      (async () => {
+        /* googlebot görünümü: önce doğrudan (bazı cloaklar Google'a gerçek sayfa gösterir),
+           ulaşılamazsa relay-render */
+        const direct = await captureView(browser, url, 'googlebot', GOOGLEBOT_UA, dir);
+        if (direct.ok) return direct;
+        const gHtml = await fetchViaRelay(relay, relayKey, url, 'bot');
+        return captureRelayView(browser, rewriteAssets(gHtml.body, host), 'googlebot', dir);
+      })(),
       (async () => {
         /* sağlıklı sitelerde eski yol: doğrudan çekim. Sadece engellenirse translate'e düş */
         const direct = await captureView(browser, url, 'user', USER_UA, dir);
