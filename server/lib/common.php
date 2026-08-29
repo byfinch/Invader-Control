@@ -40,7 +40,32 @@ function gb_init_db(string $dbFile): void {
     if (!in_array('unote', $names, true)) gb_db($dbFile)->exec("ALTER TABLE checks ADD COLUMN unote TEXT DEFAULT ''");
 }
 
-function gb_fetch(string $url, string $ua, int $timeout = 15, string $proxy = ''): array {
+/* Ağ katmanı: doğrudan / proxy / Google Apps Script relay
+   $net = ['proxy' => '', 'relay' => '', 'relay_key' => ''] — boşsa doğrudan bağlanır */
+function gb_net_fetch(string $url, string $ua, string $uaKind, int $timeout, array $net): array {
+    $relay = (string) ($net['relay'] ?? '');
+    if ($relay !== '') {
+        $sep = strpos($relay, '?') === false ? '?' : '&';
+        $rurl = $relay . $sep . 'u=' . urlencode($url) . '&ua=' . $uaKind . '&k=' . urlencode((string) ($net['relay_key'] ?? ''));
+        $ch = curl_init($rurl);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => $timeout + 15,   /* relay'ın kendi fetch'i de süre yer */
+            CURLOPT_CONNECTTIMEOUT => min($timeout, 20),
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ]);
+        $raw = curl_exec($ch);
+        $cerr = curl_error($ch);
+        curl_close($ch);
+        $j = json_decode((string) $raw, true);
+        if (!is_array($j) || !($j['ok'] ?? false)) {
+            return [0, '', '', $cerr !== '' ? $cerr : (is_array($j) ? (string) ($j['error'] ?? 'relay hatası') : 'relay yanıtı bozuk')];
+        }
+        $hdr = '';
+        foreach (($j['headers'] ?? []) as $k => $v) $hdr .= $k . ': ' . (is_array($v) ? implode(', ', $v) : (string) $v) . "\n";
+        return [(int) ($j['code'] ?? 0), $hdr, (string) ($j['body'] ?? ''), ''];
+    }
     $ch = curl_init($url);
     $opts = [
         CURLOPT_USERAGENT => $ua,
@@ -53,6 +78,7 @@ function gb_fetch(string $url, string $ua, int $timeout = 15, string $proxy = ''
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
     ];
+    $proxy = (string) ($net['proxy'] ?? '');
     if ($proxy !== '') $opts[CURLOPT_PROXY] = $proxy;   /* örn. socks5h://127.0.0.1:1080 veya http://user:pass@host:3128 */
     curl_setopt_array($ch, $opts);
     $raw = curl_exec($ch);
@@ -62,6 +88,11 @@ function gb_fetch(string $url, string $ua, int $timeout = 15, string $proxy = ''
     curl_close($ch);
     if ($raw === false) return [0, '', '', $err];
     return [$code, substr($raw, 0, $hs), substr($raw, $hs), $err];
+}
+
+/* eski imza korunuyor */
+function gb_fetch(string $url, string $ua, int $timeout = 15, string $proxy = ''): array {
+    return gb_net_fetch($url, $ua, 'user', $timeout, ['proxy' => $proxy]);
 }
 
 function gb_host_of(string $href): string {
@@ -128,8 +159,21 @@ const GB_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bo
 const USER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
 /* İki görünümü tek seferde paralel çek — site başına bekleme yarıya iner */
-function gb_fetch_pair(string $url, int $timeout, string $proxy = ''): array {
-    $mk = function (string $ua) use ($url, $timeout, $proxy) {
+function gb_fetch_pair(string $url, int $timeout, array $net = []): array {
+    $mk = function (string $ua, string $uaKind) use ($url, $timeout, $net) {
+        $relay = (string) ($net['relay'] ?? '');
+        if ($relay !== '') {
+            $sep = strpos($relay, '?') === false ? '?' : '&';
+            $ch = curl_init($relay . $sep . 'u=' . urlencode($url) . '&ua=' . $uaKind . '&k=' . urlencode((string) ($net['relay_key'] ?? '')));
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => $timeout + 15,
+                CURLOPT_CONNECTTIMEOUT => min($timeout, 20),
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => 2,
+            ]);
+            return [$ch, true];
+        }
         $ch = curl_init($url);
         $opts = [
             CURLOPT_USERAGENT => $ua,
@@ -142,38 +186,49 @@ function gb_fetch_pair(string $url, int $timeout, string $proxy = ''): array {
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
         ];
+        $proxy = (string) ($net['proxy'] ?? '');
         if ($proxy !== '') $opts[CURLOPT_PROXY] = $proxy;
         curl_setopt_array($ch, $opts);
-        return $ch;
+        return [$ch, false];
     };
-    $a = $mk(GB_UA); $b = $mk(USER_UA);
+    [$a, $aRelay] = $mk(GB_UA, 'bot');
+    [$b, $bRelay] = $mk(USER_UA, 'user');
     $mh = curl_multi_init();
     curl_multi_add_handle($mh, $a); curl_multi_add_handle($mh, $b);
     $running = null;
     do { curl_multi_exec($mh, $running); if ($running) curl_multi_select($mh, 1.0); } while ($running);
-    $read = function ($ch) {
+    $read = function ($ch, bool $isRelay) {
         $raw = curl_multi_getcontent($ch);
         $err = curl_error($ch);
+        if ($isRelay) {
+            $j = json_decode((string) $raw, true);
+            if (!is_array($j) || !($j['ok'] ?? false)) {
+                return [0, '', '', $err !== '' ? $err : (is_array($j) ? (string) ($j['error'] ?? 'relay hatası') : 'relay yanıtı bozuk')];
+            }
+            $hdr = '';
+            foreach (($j['headers'] ?? []) as $k => $v) $hdr .= $k . ': ' . (is_array($v) ? implode(', ', $v) : (string) $v) . "\n";
+            return [(int) ($j['code'] ?? 0), $hdr, (string) ($j['body'] ?? ''), ''];
+        }
         $hs  = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         if ($raw === false || $code === 0) return [0, '', '', $err !== '' ? $err : 'istek başarısız'];
         return [$code, substr($raw, 0, $hs), substr($raw, $hs), $err];
     };
-    $ra = $read($a); $rb = $read($b);
+    $ra = $read($a, $aRelay); $rb = $read($b, $bRelay);
     curl_multi_remove_handle($mh, $a); curl_multi_remove_handle($mh, $b);
     curl_multi_close($mh); curl_close($a); curl_close($b);
     return [$ra, $rb];
 }
 
 /* Tek site kontrolü — hata fırlatmaz, her zaman sonuç dizisi döner */
-function gb_check(array $site, string $proxy = ''): array {
+function gb_check(array $site, array $net = []): array {
     $url = $site['url'];
     if (!preg_match('~^https?://~i', $url)) $url = 'https://' . $url;
     try {
-        [$bot, $usr] = gb_fetch_pair($url, 25, $proxy);
+        [$bot, $usr] = gb_fetch_pair($url, 25, $net);
         /* kasıtlı yavaşlatmaya bir şans daha — sadece düşen taraf tek başına tekrarlanır */
-        if ($bot[0] === 0) { sleep(1); $bot = gb_fetch($url, GB_UA, 25, $proxy); }
-        if ($usr[0] === 0) { sleep(1); $usr = gb_fetch($url, USER_UA, 20, $proxy); }
+        if ($bot[0] === 0) { sleep(1); $bot = gb_net_fetch($url, GB_UA, 'bot', 25, $net); }
+        if ($usr[0] === 0) { sleep(1); $usr = gb_net_fetch($url, USER_UA, 'user', 20, $net); }
     } catch (Throwable $e) {
         return ['status' => 'ERROR', 'http' => 0, 'size' => 0, 'alt' => [], 'note' => $e->getMessage(), 'ustatus' => 'ERROR', 'usize' => 0, 'unote' => $e->getMessage()];
     }
@@ -322,7 +377,11 @@ function gb_process(array $site, array $cfg, string $dbFile): array {
     gb_init_db($dbFile);
     $url = $site['url'];
     $name = $site['name'] ?? $url;
-    $r = gb_check($site, (string) ($cfg['proxy'] ?? ''));
+    $r = gb_check($site, [
+        'proxy' => (string) ($cfg['proxy'] ?? ''),
+        'relay' => (string) ($cfg['relay'] ?? ''),
+        'relay_key' => (string) ($cfg['relay_key'] ?? ''),
+    ]);
 
     gb_db($dbFile)->prepare("INSERT INTO checks(site,status,http,size,alt,note,ustatus,usize,unote) VALUES(?,?,?,?,?,?,?,?,?)")
         ->execute([$url, $r['status'], $r['http'], $r['size'], implode(',', $r['alt']), $r['note'], $r['ustatus'] ?? '-', $r['usize'] ?? 0, $r['unote'] ?? '']);

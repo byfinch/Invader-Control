@@ -11,7 +11,7 @@ if (!is_array($CFG)) { fwrite(STDERR, "config.json bozuk\n"); exit(1); }
 $cmd = $argv[1] ?? 'run';
 
 if ($cmd === 'test' && isset($argv[2])) {
-    $r = gb_check(['url' => $argv[2], 'expect' => '']);
+    $r = gb_check(['url' => $argv[2], 'expect' => ''], ['proxy' => (string) ($CFG['proxy'] ?? ''), 'relay' => (string) ($CFG['relay'] ?? ''), 'relay_key' => (string) ($CFG['relay_key'] ?? '')]);
     printf("%-10s HTTP %d | alt=%s | %s | kullanıcı=%s(%d b)\n", $r['status'], $r['http'], $r['alt'] ? implode(',', $r['alt']) : '-', $r['note'], $r['ustatus'], $r['usize']);
     exit(0);
 }

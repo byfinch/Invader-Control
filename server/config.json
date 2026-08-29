@@ -4,6 +4,8 @@
         "chat_id": ""
     },
     "proxy": "",
+    "relay": "",
+    "relay_key": "",
     "sites": [
         {
             "name": "lamachine-labkine.com",
