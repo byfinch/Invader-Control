@@ -20,6 +20,10 @@ function worker_process(array $job): void {
     global $BASE;
     $cfg = json_decode((string) @file_get_contents("$BASE/config.json"), true) ?: [];
     $sites = $cfg['sites'] ?? [];
+    /* tek site taraması: panel site_filter gönderdiyse sadece onu işle */
+    if (!empty($job['site_filter'])) {
+        $sites = array_values(array_filter($sites, fn($s) => ($s['url'] ?? '') === $job['site_filter']));
+    }
     $job['status'] = 'running'; $job['total'] = count($sites); $job['completed'] = 0; $job['current'] = ''; $job['results'] = []; $job['updated_at'] = date('c');
     worker_save($job);
     @file_put_contents("$BASE/data/jobs/active.json", json_encode($job), LOCK_EX);
