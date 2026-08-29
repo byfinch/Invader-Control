@@ -128,15 +128,27 @@ async function captureTranslateView(browser, url, dir) {
   const page = await context.newPage();
   try {
     /* HTML'i tarayıcısız çek (hızlı), görselleştirmeyi yerelde yap.
-       origin kasten süründürüyor + translate CSS'i JS'siz içeriği gizliyor:
-       tüm alt kaynakları kes, saf içeriği işle — stilsiz ama gerçek görüntü. */
-    const turl = translateUrl(url);
-    const resp = await fetch(turl, {redirect: 'follow'});
+       relative URL'ler translate host'una <base> ile bağlanır; sadece sitenin kendi
+       css/görselleri (translate proxy) ve google fontları geçer, geri kalan her şey kesik. */
+    const thost = new URL(url).host.replace(/\./g, '-');
+    const TH = 'https://' + thost + '.translate.goog';
+    const resp = await fetch(TH + (new URL(url).pathname || '/') + '?_x_tr_sl=auto&_x_tr_tl=tr&_x_tr_hl=tr', {redirect: 'follow'});
     if (!resp.ok) throw new Error('translate http ' + resp.status);
-    const html = await resp.text();
-    await context.route('**/*', (route) => route.abort().catch(() => {}));
-    await page.setContent(html, {waitUntil: 'load', timeout: 10000}).catch(() => {});
-    await page.waitForTimeout(800);
+    let html = await resp.text();
+    html = html.replace(/<head([^>]*)>/i, '<head$1><base href="' + TH + '/">');
+    await context.route('**/*', (route) => {
+      const req = route.request();
+      const type = req.resourceType();
+      const u = req.url();
+      const okHost = u.startsWith(TH) || u.includes('googleapis.com') || u.includes('gstatic.com');
+      if ((type === 'stylesheet' || type === 'image') && okHost) {
+        const timer = setTimeout(() => route.abort().catch(() => {}), 6000);
+        return route.continue().finally(() => clearTimeout(timer));
+      }
+      return route.abort().catch(() => {});
+    });
+    await page.setContent(html, {waitUntil: 'load', timeout: 25000}).catch(() => {});
+    await page.waitForTimeout(1500);
     await page.addStyleTag({content: '.goog-te-banner-frame,.goog-te-banner,#goog-gt-tt,.goog-te-balloon-frame,#goog-gt-vc{display:none!important}body{top:0!important;position:static!important}'}).catch(() => {});
     const file = path.join(dir, 'user.png');
     try {
