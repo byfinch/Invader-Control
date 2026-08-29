@@ -144,7 +144,12 @@ try {
         header('Content-Type: application/json; charset=utf-8');
         if ($_GET['job'] === 'active') {
             $active = @json_decode((string) @file_get_contents("$BASE/data/jobs/active.json"), true);
-            echo json_encode(is_array($active) ? $active : ['status' => 'idle']);
+            if (is_array($active) && in_array($active['status'] ?? '', ['queued', 'running'], true)) {
+                $active['busy'] = true;
+                echo json_encode($active);
+            } else {
+                echo json_encode(['status' => 'idle', 'busy' => gb_run_locked($BASE)]);
+            }
         } else {
             $job = @json_decode((string) @file_get_contents(job_file((string) $_GET['job'])), true);
             echo json_encode(is_array($job) ? $job : ['status' => 'missing']);
@@ -223,6 +228,11 @@ try {
         $active = @json_decode((string) @file_get_contents("$BASE/data/jobs/active.json"), true);
         if (is_array($active) && in_array($active['status'] ?? '', ['queued', 'running'], true)) {
             echo json_encode(['ok' => true, 'job_id' => $active['id'], 'existing' => true]); exit;
+        }
+        /* cron taraması sürüyorsa yeni iş alma — sistem sağlığı */
+        if (gb_run_locked($BASE)) {
+            http_response_code(409);
+            echo json_encode(['ok' => false, 'error' => 'Şu an arka plan taraması çalışıyor. Bitince tekrar deneyin.']); exit;
         }
         $id = bin2hex(random_bytes(12));
         $job = ['id' => $id, 'status' => 'queued', 'total' => $filterUrl !== '' ? 1 : count($CFG['sites'] ?? []), 'completed' => 0, 'current' => '', 'results' => [], 'started_at' => date('c'), 'updated_at' => date('c')];
@@ -447,6 +457,7 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
     cDone.textContent=done; cOk.textContent=ok; cDown.textContent=down; cWarn.textContent=warn;
     const base=total||1;
     setSeg(sOk,ok*100/base); setSeg(sDown,down*100/base); setSeg(sWarn,warn*100/base); setSeg(sLeft,Math.max(0,(total-done)*100/base));
+    document.querySelectorAll('.btn-check').forEach(function(b){ b.disabled=(job.status!=='completed'); });
     if(job.status==='completed'){
       const results=Array.isArray(job.results)?job.results:[];
       const sent=results.filter(function(r){return r.notified;}).length;
@@ -464,6 +475,7 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
   }
   async function poll(id){try{const response=await fetch('?job='+encodeURIComponent(id),{cache:'no-store'});if(response.status===401){showError('Oturum süresi doldu. Giriş sayfasına yönlendiriliyorsunuz...');setTimeout(function(){location.reload()},1200);return;}const job=await response.json();showJob(job);}catch(e){showError('İlerleme bilgisi alınamadı. Sunucu işi çalışmaya devam ediyor olabilir.');}}
   async function startRun(ukey){
+    if(button.disabled) return;
     button.disabled=true;button.textContent='Kontrol başlatılıyor...';box.hidden=false;box.classList.remove('error');title.textContent='Kontrol başlatılıyor';count.textContent='';current.textContent='Sunucu işi hazırlanıyor...';eta.textContent='';cDone.textContent='0';cOk.textContent='0';cDown.textContent='0';cWarn.textContent='0';setSeg(sOk,0);setSeg(sDown,0);setSeg(sWarn,0);setSeg(sLeft,100);
     try{
       const fd=new FormData();
@@ -479,7 +491,29 @@ button,input{font:inherit}.topbar{height:70px;padding:0 max(24px,calc((100% - 11
   }
   window.startRun=startRun;
   form.addEventListener('submit',function(event){event.preventDefault();startRun('');});
-  fetch('?job=active',{cache:'no-store'}).then(r=>r.json()).then(job=>{if(job&&job.id&&job.status==='running') poll(job.id);}).catch(function(){});
+  function showBusy(){
+    box.hidden=false;box.classList.remove('error');
+    title.textContent='Arka plan taraması çalışıyor';
+    count.textContent='';cDone.textContent='-';cOk.textContent='-';cDown.textContent='-';cWarn.textContent='-';setSeg(sOk,0);setSeg(sDown,0);setSeg(sWarn,0);setSeg(sLeft,100);
+    current.textContent='Zamanlanmış tarama bitince kontrol butonu açılır...';eta.textContent='';
+    button.disabled=true;button.textContent='Tarama sürüyor...';
+    document.querySelectorAll('.btn-check').forEach(function(b){ b.disabled=true; });
+    setTimeout(async function(){
+      try{
+        const r=await fetch('?job=active',{cache:'no-store'});
+        if(r.status===401){location.reload();return;}
+        const j=await r.json();
+        if(j&&j.id&&j.status==='running'){poll(j.id);return;}
+        if(j&&j.busy){showBusy();return;}
+      }catch(e){}
+      box.hidden=true;resetButton();
+      document.querySelectorAll('.btn-check').forEach(function(b){ b.disabled=false; });
+    },15000);
+  }
+  fetch('?job=active',{cache:'no-store'}).then(r=>r.json()).then(job=>{
+    if(job&&job.id&&job.status==='running') poll(job.id);
+    else if(job&&job.busy) showBusy();
+  }).catch(function(){});
 })();
 </script>
 <script>

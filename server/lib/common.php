@@ -267,6 +267,15 @@ function gb_check(array $site, array $net = []): array {
     return $r;
 }
 
+/* koşu kilidi şu an dolu mu (cron veya worker taraması sürüyor) */
+function gb_run_locked(string $base): bool {
+    $f = @fopen("$base/data/run.lock", 'r');   /* dosya root'a ait; panel kullanıcısı yazamaz, okumak yeterli */
+    if ($f === false) return false;
+    if (flock($f, LOCK_EX | LOCK_NB)) { flock($f, LOCK_UN); fclose($f); return false; }
+    fclose($f);
+    return true;
+}
+
 /* 7 günden eski kanıt dizinlerini sil — disk şişmesin */
 function gb_evidence_cleanup(string $base, int $days = 7): void {
     $root = "$base/data/evidence";
