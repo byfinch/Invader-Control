@@ -287,11 +287,11 @@ function gb_db_cleanup(string $dbFile, int $days = 90): void {
     gb_db($dbFile)->exec("DELETE FROM checks WHERE ts < datetime('now', '-$days days')");
 }
 
-function gb_capture(string $url, string $id, string $proxy = ''): array {
+function gb_capture(string $url, string $id, string $proxy = '', string $relay = '', string $relayKey = ''): array {
     $ch = curl_init('http://127.0.0.1:6077/capture');
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => json_encode(['url' => $url, 'id' => $id, 'proxy' => $proxy]),
+        CURLOPT_POSTFIELDS => json_encode(['url' => $url, 'id' => $id, 'proxy' => $proxy, 'relay' => $relay, 'relay_key' => $relayKey]),
         CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 130,
@@ -358,7 +358,7 @@ function gb_notify_run(array $cfg, array $results): bool {
     foreach ($results as $result) {
         $http = (int) ($result['http'] ?? 0);
         if ($http > 0) {
-            $capture = gb_capture($result['url'] ?? '', $result['name'] ?? 'site', $proxy);
+            $capture = gb_capture($result['url'] ?? '', $result['name'] ?? 'site', $proxy, (string) ($cfg['relay'] ?? ''), (string) ($cfg['relay_key'] ?? ''));
             if (($capture['ok'] ?? false) && gb_tg_send_evidence($telegram, $result, $capture)) continue;
             $err = (string) ($capture['error'] ?? 'gönderim hatası');
         } else {

@@ -41,6 +41,17 @@ async function captureView(browser, url, key, userAgent, dir) {
       response = await page.goto(url, {waitUntil: 'commit', timeout: 15000}).catch(() => null);
     }
     await page.waitForTimeout(1500);
+    {
+      /* commit bazen hata sayfasını "başarılı" döndürür; kara delikte about:blank'ta kalır */
+      const curUrl = page.url();
+      if (curUrl.startsWith('chrome-error') || curUrl === 'about:blank') {
+        throw new Error('siteye ulaşılamadı (tarayıcı hata sayfası)');
+      }
+      const bodyText = await page.evaluate(() => (document.body ? document.body.innerText.slice(0, 2000) : '')).catch(() => '');
+      if (/\bERR_(CONNECTION|TIMED|NAME|ADDRESS|SSL|PROXY|DNS)[A-Z_]*\b/.test(bodyText)) {
+        throw new Error('siteye ulaşılamadı (tarayıcı hata sayfası)');
+      }
+    }
     await page.evaluate(() => window.stop()).catch(() => {}); /* asılı kalan yüklemeyi kes */
     const file = path.join(dir, `${key}.png`);
     try {
@@ -60,14 +71,72 @@ async function captureView(browser, url, key, userAgent, dir) {
   }
 }
 
-async function captureWork(browser, url, dir) {
+/* relay üzerinden HTML çek (Google IP'si + seçilen UA) */
+async function fetchViaRelay(relay, key, target, uaKind) {
+  const sep = relay.includes('?') ? '&' : '?';
+  const r = await fetch(relay + sep + 'u=' + encodeURIComponent(target) + '&ua=' + uaKind + '&k=' + encodeURIComponent(key), {redirect: 'follow'});
+  const j = await r.json();
+  if (!j || !j.ok) throw new Error((j && j.error) || 'relay hatası');
+  return j;
+}
+
+/* sayfa kaynaklarını Google translate proxy'sine yönlendir — engelli host'a hiç istek gitmesin */
+function rewriteAssets(html, host) {
+  const thost = host.replace(/\./g, '-');
+  const toT = (u) => {
+    try {
+      const abs = new URL(u, 'https://' + host + '/');
+      if (abs.host !== host) return u;   /* dış kaynaklar (CDN vb.) engelli değil, dokunma */
+      const qs = abs.search ? abs.search + '&' : '?';
+      return 'https://' + thost + '.translate.goog' + abs.pathname + qs + '_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en';
+    } catch { return u; }
+  };
+  return String(html).replace(/\b(src|href|action)\s*=\s*(["'])([^"']+)\2/g, (m, a, q, u) => `${a}=${q}${toT(u)}${q}`);
+}
+
+async function captureRelayView(browser, html, key, dir) {
+  const context = await browser.newContext({viewport: {width: 1440, height: 900}, deviceScaleFactor: 1});
+  const page = await context.newPage();
+  try {
+    await page.setContent(html, {waitUntil: 'load', timeout: 30000}).catch(() => {});
+    await page.waitForTimeout(1200);
+    const file = path.join(dir, `${key}.png`);
+    await page.screenshot({path: file, fullPage: false, timeout: 20000});
+    return {ok: true, data: {path: file, http: 200, title: await page.title().catch(() => '')}};
+  } catch (e) {
+    return {ok: false, error: e.message};
+  } finally {
+    await context.close();
+  }
+}
+
+async function captureWork(browser, url, dir, proxy, relay, relayKey) {
   const result = {};
   const errors = {};
-  /* iki görünüm paralel — tek yavaş site toplam süreyi ikiye katlamasın */
-  const [g, u] = await Promise.all([
-    captureView(browser, url, 'googlebot', GOOGLEBOT_UA, dir),
-    captureView(browser, url, 'user', USER_UA, dir),
-  ]);
+  let g, u;
+  if (relay) {
+    /* googlebot görünümü relay'den (Google IP'si → cloak'u görür, doğru sinyal).
+       normal kullanıcı görünümü vekil üzerinden (varsa) — gerçek kullanıcı gibi;
+       vekil yoksa son çare relay (Google altyapısının gördüğü hâl). */
+    const host = new URL(url).host;
+    const gHtml = await fetchViaRelay(relay, relayKey, url, 'bot');
+    const jobs = [captureRelayView(browser, rewriteAssets(gHtml.body, host), 'googlebot', dir)];
+    if (proxy) {
+      jobs.push(captureView(browser, url, 'user', USER_UA, dir));
+    } else {
+      jobs.push((async () => {
+        const uHtml = await fetchViaRelay(relay, relayKey, url, 'user');
+        return captureRelayView(browser, rewriteAssets(uHtml.body, host), 'user', dir);
+      })());
+    }
+    [g, u] = await Promise.all(jobs);
+  } else {
+    /* iki görünüm paralel — tek yavaş site toplam süreyi ikiye katlamasın */
+    [g, u] = await Promise.all([
+      captureView(browser, url, 'googlebot', GOOGLEBOT_UA, dir),
+      captureView(browser, url, 'user', USER_UA, dir),
+    ]);
+  }
   if (g.ok) result.googlebot = g.data; else errors.googlebot = g.error;
   if (u.ok) result.user = u.data; else errors.user = u.error;
   if (!result.googlebot && !result.user) return {ok: false, error: errors.googlebot || errors.user || 'capture failed'};
@@ -94,7 +163,7 @@ function parseProxy(p) {
   } catch { return {server: p}; }
 }
 
-async function capture(url, id, proxy = '') {
+async function capture(url, id, proxy = '', relay = '', relayKey = '') {
   if (!/^https?:\/\//i.test(url)) throw new Error('invalid URL');
   const safeId = String(id || 'site').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -110,7 +179,7 @@ async function capture(url, id, proxy = '') {
   try {
     /* sert sınır: ne takılırsa takılsın (CDP çağrısının timeout'u yok) 90 sn'de kes */
     return await Promise.race([
-      captureWork(browser, url, dir),
+      captureWork(browser, url, dir, proxy, relay, relayKey),
       new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('hard capture timeout (90s)')), 90000); }),
     ]);
   } catch (error) {
@@ -129,7 +198,13 @@ const server = http.createServer(async (req, res) => {
   }
   try {
     const input = await readBody(req);
-    const result = await capture(input.url, input.id, typeof input.proxy === 'string' ? input.proxy : '');
+    const result = await capture(
+      input.url,
+      input.id,
+      typeof input.proxy === 'string' ? input.proxy : '',
+      typeof input.relay === 'string' ? input.relay : '',
+      typeof input.relay_key === 'string' ? input.relay_key : ''
+    );
     reply(res, 200, {ok: true, ...result});
   } catch (error) {
     reply(res, 500, {ok: false, error: error.message});
