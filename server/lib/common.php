@@ -257,19 +257,32 @@ function gb_check(array $site, array $net = []): array {
         $expect = gb_host_of((string) ($site['expect'] ?? ''));
         if ($expect === '') {
             $r = ['status' => 'OBSERVED', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => $alts ? '' : 'alternate link yok'];
-        } elseif (in_array($expect, $alts, true)) {
-            $r = ['status' => 'OK', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => ''];
-        } elseif (!$alts) {
-            $hasHtml = stripos($body, '<body') !== false || stripos($body, '<title') !== false;
-            $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => [], 'note' => $hasHtml ? 'alternate link yok' : 'HTML donmedi'];
         } else {
-            $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => 'alternate: ' . implode(', ', $alts)];
-        }
-        /* relay yedeğinden gelen "alternate yok/uymuyor" güvenilmez (zıt kutuplu cloak):
-           DOWN yerine OBSERVED — yanıltıcı alarm üretme */
-        if ($viaRelay && $r['status'] === 'DOWN') {
-            $r['status'] = 'OBSERVED';
-            $r['note'] = 'direct başarısız, relay ile: ' . $r['note'];
+            $allAlts = $alts;
+            /* rotasyonlu cloak: ilk örnek meşru sayfa çekmiş olabilir — beklenen yoksa 2 örnek daha */
+            for ($i = 0; $i < 2 && !in_array($expect, $allAlts, true); $i++) {
+                sleep(1);
+                [$rc, $rh, $rb, $re] = $viaRelay
+                    ? gb_net_fetch($url, GB_UA, 'bot', 25, $net)
+                    : gb_net_fetch($url, GB_UA, 'bot', 25, $direct);
+                if ($rc !== 0 && !gb_is_challenge($rc, $rh, $rb)) {
+                    $allAlts = array_values(array_unique(array_merge($allAlts, gb_alternates($rb))));
+                }
+            }
+            if (in_array($expect, $allAlts, true)) {
+                $r = ['status' => 'OK', 'http' => $code, 'size' => strlen($body), 'alt' => $allAlts, 'note' => ''];
+            } elseif (!$allAlts) {
+                $hasHtml = stripos($body, '<body') !== false || stripos($body, '<title') !== false;
+                $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => [], 'note' => $hasHtml ? 'alternate link yok' : 'HTML donmedi'];
+            } else {
+                $r = ['status' => 'DOWN', 'http' => $code, 'size' => strlen($body), 'alt' => $allAlts, 'note' => 'alternate: ' . implode(', ', $allAlts)];
+            }
+            /* relay yedeğinden gelen "alternate yok/uymuyor" güvenilmez (zıt kutuplu cloak):
+               DOWN yerine OBSERVED — yanıltıcı alarm üretme */
+            if ($viaRelay && $r['status'] === 'DOWN') {
+                $r['status'] = 'OBSERVED';
+                $r['note'] = 'direct başarısız, relay ile: ' . $r['note'];
+            }
         }
     }
 
