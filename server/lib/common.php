@@ -259,17 +259,19 @@ function gb_check(array $site, array $net = []): array {
             $r = ['status' => 'OBSERVED', 'http' => $code, 'size' => strlen($body), 'alt' => $alts, 'note' => $alts ? '' : 'alternate link yok'];
         } else {
             $allAlts = $alts;
-            /* rotasyonlu cloak: ilk örnek meşru sayfa çekmiş olabilir — beklenen yoksa 2 örnek daha */
-            for ($i = 0; $i < 2 && !in_array($expect, $allAlts, true); $i++) {
+            /* rotasyonlu cloak: beklenen domain etikette ya da sayfanın herhangi bir yerinde geçebilir */
+            $hit = in_array($expect, $allAlts, true) || stripos($body, $expect) !== false;
+            for ($i = 0; $i < 2 && !$hit; $i++) {
                 sleep(1);
                 [$rc, $rh, $rb, $re] = $viaRelay
                     ? gb_net_fetch($url, GB_UA, 'bot', 25, $net)
                     : gb_net_fetch($url, GB_UA, 'bot', 25, $direct);
                 if ($rc !== 0 && !gb_is_challenge($rc, $rh, $rb)) {
                     $allAlts = array_values(array_unique(array_merge($allAlts, gb_alternates($rb))));
+                    if (in_array($expect, $allAlts, true) || stripos($rb, $expect) !== false) $hit = true;
                 }
             }
-            if (in_array($expect, $allAlts, true)) {
+            if ($hit) {
                 $r = ['status' => 'OK', 'http' => $code, 'size' => strlen($body), 'alt' => $allAlts, 'note' => ''];
             } elseif (!$allAlts) {
                 $hasHtml = stripos($body, '<body') !== false || stripos($body, '<title') !== false;
