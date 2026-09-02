@@ -404,12 +404,10 @@ function gb_notify_run(array $cfg, array $results): bool {
         $becameBad = $bad && $prev !== null && $prev !== $result['status'];
         $recovered = !$bad && $prev !== null && in_array($prev, ['DOWN', 'ERROR', 'BLOCKED'], true);
 
-        $capture = null;
-        if ($http > 0) {
-            $capture = gb_capture($result['url'] ?? '', $result['name'] ?? 'site', $proxy, (string) ($cfg['relay'] ?? ''), (string) ($cfg['relay_key'] ?? ''));
-        }
+        /* HTTP 0 olsa bile kanıt üretmeyi dene — site erişilemiyorsa Chrome'un gerçek hata sayfasını çeker */
+        $capture = gb_capture($result['url'] ?? '', $result['name'] ?? 'site', $proxy, (string) ($cfg['relay'] ?? ''), (string) ($cfg['relay_key'] ?? ''));
 
-        /* kanal: mevcut davranış — her koşuda kanıt */
+        /* kanal: her koşuda kanıt */
         if ($capture && ($capture['ok'] ?? false) && gb_tg_send_evidence($telegram, $result, $capture)) {
             // kanala kanıt gitti
         } else {
@@ -437,7 +435,7 @@ function gb_notify_run(array $cfg, array $results): bool {
                 "\n🕐 $now (TSİ)";
             foreach ($alertUsers as $uid) {
                 $sent = false;
-                if ($becameBad && $capture && ($capture['ok'] ?? false)) {
+                if (($becameBad || $recovered) && $capture && ($capture['ok'] ?? false)) {
                     $sent = gb_tg_send_evidence($telegram, $result, $capture, (string) $uid, $prefix);
                 }
                 if (!$sent) gb_tg_send_text($telegram, $dmText, (string) $uid);
