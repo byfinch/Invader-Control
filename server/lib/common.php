@@ -373,7 +373,7 @@ function gb_tg_send_evidence(array $tg, array $result, array $capture, ?string $
 }
 
 function gb_emoji(string $st): string {
-    return ['OK' => "\u{2705}", 'DOWN' => "\u{1F534}", 'BLOCKED' => "\u{26A0}", 'ERROR' => "\u{2754}"][$st] ?? "\u{2754}";
+    return ['OK' => "\u{2705}", 'DOWN' => "\u{1F534}", 'BLOCKED' => "\u{26A0}", 'ERROR' => "\u{274C}"][$st] ?? "\u{274C}";
 }
 
 /* Kanıt üretilemediğinde sessiz kalmamak için düz metin bildirim */
