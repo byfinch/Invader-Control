@@ -25,23 +25,6 @@ async function readBody(req) {
   return JSON.parse(body);
 }
 
-/* Hata kartı: site erişilemezken de kanıt boş kalmasın — durum kartı üret (url, görünüm adı, hata sebebi ve zaman damgası ile */
-function errorCardHtml(url, viewLabel, errText) {
-  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const time = new Date().toLocaleString('sv-SE');
-  const short = String(errText || 'bilinmeyen hata').slice(0, 320);
-  return '<!doctype html><html><head><meta charset="utf-8"><body style="margin:0;height:100vh;display:grid;place-items:center;background:#020402;font-family:ui-monospace,Menlo,monospace;color:#c9ffd6">'
-    + '<div style="width:82%;padding:52px 60px;border:1px solid #12301c;background:#050805">'
-    + '<div style="border-left:5px solid #ff4d5e;padding-left:26px">'
-    + '<div style="color:#5f8a6a;font-size:12px;letter-spacing:3px">INVADER CONTROL // KANIT KARTI</div>'
-    + '<div style="font-size:34px;font-weight:700;color:#ff4d5e;margin-top:10px">ULAŞILAMADI</div>'
-    + '<div style="margin-top:16px;font-size:15px;color:#8fc39c">' + esc(viewLabel) + ' görünümü alınamadı — siteye erişilemiyor veya görsel alınamadı</div>'
-    + '<div style="margin-top:16px;font-size:17px;color:#39ff6a;word-break:break-all">' + esc(url) + '</div>'
-    + '<div style="margin-top:16px;font-size:13px;color:#ffb9c1;white-space:pre-wrap">' + esc(errText.slice(0, 320)) + '</div>'
-    + '<div style="margin-top:20px;font-size:12px;color:#5f8a6a">' + esc(time) + '</div>'
-    + '</div></body></html>';
-}
-
 async function captureView(browser, url, key, userAgent, dir) {
   const context = await browser.newContext({
     userAgent,
@@ -83,11 +66,12 @@ async function captureView(browser, url, key, userAgent, dir) {
     return {ok: true, data: {path: file, http: response?.status() ?? 0, title: await page.title().catch(() => '')}};
   } catch (viewError) {
     try {
+      /* uydurma kart yok: gerçek Chrome hata sayfası üretilemediğinde bile kendi ekran görüntüsünü al */
+      await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 15000}).catch(() => {});
+      await page.waitForTimeout(1500);
       const file = path.join(dir, `${key}.png`);
-      await page.setContent(errorCardHtml(url, key === 'googlebot' ? 'GOOGLEBOT' : 'NORMAL KULLANICI', String(viewError.message || viewError)));
-      await page.waitForTimeout(400);
-      const shot = await page.screenshot({path: file, fullPage: false});
-      return {ok: true, data: {path: file, http: 0, title: '', errorCard: true}};
+      await page.screenshot({path: file, fullPage: false});
+      return {ok: true, data: {path: file, http: 0, title: '', error: String(viewError.message || viewError)}};
     } catch (cardError) {
       return {ok: false, error: viewError.message};
     }
