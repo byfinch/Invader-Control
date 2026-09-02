@@ -34,7 +34,7 @@ function worker_process(array $job): void {
             $notified = gb_notify_run($cfg, [$result]);
             $job['results'][] = ['name' => $result['name'], 'status' => $result['status'], 'user_status' => $result['ustatus'] ?? '-', 'http' => $result['http'], 'notified' => $notified, 'error' => ''];
         } catch (Throwable $e) {
-            $job['results'][] = ['name' => $site['name'] ?? $site['url'], 'status' => 'ERROR', 'user_status' => 'ERROR', 'http' => 0, 'notified' => false, 'error' => $e->getMessage()];
+            $job['results'][] = ['name' => $site['name'] ?? $site['url'], 'status' => 'ERROR', 'user_status' => 'ERROR', 'http' => 0, 'notified' => false, 'error' => $e->getMessage(), 'url' => $site['url'] ?? '', 'expect' => $site['expect'] ?? ''];
         }
         $job['completed']++; $job['updated_at'] = date('c'); worker_save($job); @file_put_contents("$BASE/data/jobs/active.json", json_encode($job), LOCK_EX);
     }

@@ -30,7 +30,7 @@ foreach ($CFG['sites'] as $s) {
         printf("%-10s %s | HTTP %d | alt=%s | %s | kullanıcı=%s%s\n", $r['status'], $s['url'], $r['http'],
             $r['alt'] ? implode(',', $r['alt']) : '-', $r['note'], $r['ustatus'] ?? '-', '');
     } catch (Throwable $e) {
-        $runResults[] = ['status' => 'ERROR', 'ustatus' => 'ERROR', 'http' => 0, 'alt' => [], 'note' => $e->getMessage(), 'name' => $s['name'] ?? $s['url']];
+        $runResults[] = ['status' => 'ERROR', 'ustatus' => 'ERROR', 'http' => 0, 'alt' => [], 'note' => $e->getMessage(), 'name' => $s['name'] ?? $s['url'], 'url' => $s['url'], 'expect' => $s['expect'] ?? '', 'unote' => ''];
         printf("HATA       %s | %s\n", $s['url'], $e->getMessage());
     }
 }
