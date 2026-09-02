@@ -100,6 +100,8 @@ function gb_fetch(string $url, string $ua, int $timeout = 15, string $proxy = ''
 function gb_host_of(string $href): string {
     $href = trim($href);
     if ($href === '') return '';
+    if ($href === '') return '';
+    if (str_starts_with($href, '//')) $href = 'https:' . $href;   /* protokol-relative //host desteği — aksi halde parse_url bozulur */
     if (!preg_match('~^[a-z][a-z0-9+.-]*://~i', $href)) $href = 'https://' . $href;  /* çıplak domain destekle */
     $h = strtolower((string) parse_url($href, PHP_URL_HOST));
     return preg_replace('/^www\./', '', $h);
